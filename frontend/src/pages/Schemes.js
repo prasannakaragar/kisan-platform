@@ -118,7 +118,7 @@ export default function Schemes() {
   const [eligLoading, setEligLoading] = useState(false);
 
   useEffect(() => {
-    axios.get('/api/schemes/meta').then(r => {
+    axios.get(`${process.env.REACT_APP_API_URL || 'http://localhost:5000/api'}/schemes/meta`).then(r => {
       setAllStates(r.data.states);
       setCategories(r.data.categories);
     }).catch(console.error);

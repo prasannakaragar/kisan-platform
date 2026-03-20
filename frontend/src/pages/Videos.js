@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 
-const api = (url, opts) => axios({ url: `/api${url}`, ...opts }).then(r => r.data);
+const API_BASE = process.env.REACT_APP_API_URL || 'http://localhost:5000/api';
+const api = (url, opts) => axios({ url: `${API_BASE}${url}`, ...opts }).then(r => r.data);
 const LEVEL_COLOR = { Beginner:'badge-green', Intermediate:'badge-amber', Advanced:'badge-blue' };
 
 export default function Videos() {
@@ -40,14 +41,12 @@ export default function Videos() {
         <p>Best tutorials from DD Kisan, ICAR, Krishi Jagran — in your local language</p>
       </div>
 
-      {/* Source badges */}
       <div style={{ display:'flex', gap:10, flexWrap:'wrap', marginBottom:20 }}>
         {[['📺 DD Kisan','#d32f2f'],['🔬 ICAR','#1565c0'],['🌾 Krishi Jagran','#2d6a2d'],['🎓 UAS Dharwad','#6a1b9a']].map(([name, color]) => (
           <span key={name} style={{ background:'white', border:`1.5px solid ${color}`, color, borderRadius:20, padding:'4px 14px', fontSize:13, fontWeight:500 }}>{name}</span>
         ))}
       </div>
 
-      {/* Filters */}
       <div className="filter-bar">
         <input placeholder="Search videos..." value={filters.search} onChange={e=>setFilters(f=>({...f,search:e.target.value}))} onKeyDown={e=>e.key==='Enter'&&fetchVideos()} />
         <select value={filters.crop} onChange={e=>setFilters(f=>({...f,crop:e.target.value}))}>
@@ -72,7 +71,6 @@ export default function Videos() {
         <div className="empty-state"><div className="icon">🎬</div><h3>No videos found</h3><p>Try different filters</p></div>
       )}
 
-      {/* Grouped by crop */}
       {filters.crop || filters.search ? (
         <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(280px,1fr))', gap:16 }}>
           {videos.map(v => <VideoCard key={v.id} video={v} onPlay={setPlaying} />)}
@@ -88,7 +86,6 @@ export default function Videos() {
         ))
       )}
 
-      {/* Video player modal */}
       {playing && (
         <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.8)', zIndex:200, display:'flex', alignItems:'center', justifyContent:'center', padding:16 }} onClick={e=>{if(e.target===e.currentTarget)setPlaying(null);}}>
           <div style={{ background:'white', borderRadius:16, maxWidth:700, width:'100%', overflow:'hidden' }}>

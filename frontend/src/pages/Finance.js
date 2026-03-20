@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 
-const api = (url, opts) => axios({ url: `/api${url}`, ...opts }).then(r => r.data);
+const API_BASE = process.env.REACT_APP_API_URL || 'http://localhost:5000/api';
+const api = (url, opts) => axios({ url: `${API_BASE}${url}`, ...opts }).then(r => r.data);
 
 const RISK_COLOR = { low:'#2d6a2d', medium:'#e65100', high:'#c62828' };
 
@@ -35,7 +36,6 @@ export default function Finance() {
         <p>Compare all farm loans side by side — find the lowest interest rate</p>
       </div>
 
-      {/* Key insight banner */}
       <div className="card" style={{ background:'#fff3e0', border:'1px solid #ffcc80', marginBottom:24 }}>
         <div style={{ fontWeight:700, fontSize:15, marginBottom:6 }}>💡 Key fact most farmers don't know</div>
         <p style={{ fontSize:14, color:'#374151', lineHeight:1.7 }}>
@@ -45,7 +45,6 @@ export default function Finance() {
 
       {loading && <div className="loading">Loading finance options...</div>}
 
-      {/* Loan comparison */}
       <h2 style={{ fontSize:18, fontWeight:700, marginBottom:16 }}>Loan Options — Sorted by Interest Rate</h2>
       <div style={{ display:'flex', flexDirection:'column', gap:12, marginBottom:32 }}>
         {loans.map((loan, i) => (
@@ -73,7 +72,6 @@ export default function Finance() {
         ))}
       </div>
 
-      {/* EMI Calculator */}
       <div className="card" style={{ marginBottom:32 }}>
         <h2 style={{ fontSize:18, fontWeight:700, marginBottom:16 }}>🧮 EMI Calculator</h2>
         <div className="form-row">
@@ -108,7 +106,6 @@ export default function Finance() {
         )}
       </div>
 
-      {/* Crop Insurance */}
       <h2 style={{ fontSize:18, fontWeight:700, marginBottom:16 }}>🛡️ Crop Insurance</h2>
       <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(280px,1fr))', gap:14 }}>
         {insurance.map(ins => (
@@ -124,7 +121,6 @@ export default function Finance() {
         ))}
       </div>
 
-      {/* Apply modal */}
       {selectedLoan && (
         <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.5)', zIndex:200, display:'flex', alignItems:'center', justifyContent:'center', padding:16 }} onClick={e=>{if(e.target===e.currentTarget) setSelectedLoan(null);}}>
           <div style={{ background:'white', borderRadius:16, maxWidth:520, width:'100%', maxHeight:'90vh', overflow:'auto', padding:28 }}>
@@ -134,12 +130,10 @@ export default function Finance() {
             </div>
             <div style={{ fontWeight:700, fontSize:22, color:'#2d6a2d', marginBottom:4 }}>{selectedLoan.interest_rate}% interest · Max ₹{selectedLoan.max_amount.toLocaleString()}</div>
             <p style={{ fontSize:13, color:'#6b7280', marginBottom:20 }}>{selectedLoan.eligibility}</p>
-
             <div style={{ marginBottom:16 }}>
               <div style={{ fontSize:13, fontWeight:600, color:'#6b7280', marginBottom:8 }}>DOCUMENTS NEEDED</div>
               {selectedLoan.documents.map(d => <span key={d} className="tag" style={{ margin:3 }}>{d}</span>)}
             </div>
-
             <div style={{ marginBottom:20 }}>
               <div style={{ fontSize:13, fontWeight:600, color:'#6b7280', marginBottom:10 }}>HOW TO APPLY</div>
               {selectedLoan.steps.map((s,i) => (
@@ -149,7 +143,6 @@ export default function Finance() {
                 </div>
               ))}
             </div>
-
             <div style={{ display:'flex', gap:10 }}>
               <a href={selectedLoan.apply_link} target="_blank" rel="noopener noreferrer"><button className="btn-primary">Apply Now ↗</button></a>
               <button className="btn-secondary" onClick={()=>setSelectedLoan(null)}>Close</button>
