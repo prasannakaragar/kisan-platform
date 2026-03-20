@@ -187,7 +187,7 @@ const VIDEOS = [
     duration: '23 min',
     level: 'Beginner',
     youtube_id: 'YS5M7J84hGU',          // Krishi Jagran Marathi – Nashik onion farming
-    thumbnail: 'https://img.youtube.com/vi/YS5M7J84hGU/mqdefault.jpg',
+    thumbnail: 'https://youtu.be/gb-VHQPhFGA?si=u2fQ0p83ou4oKcOo',
     views: '3.4L',
     tags: ['onion', 'nashik', 'storage'],
   },
@@ -217,7 +217,7 @@ const VIDEOS = [
     duration: '29 min',
     level: 'Intermediate',
     youtube_id: 'EhE8GIkOXPU',          // UAS Dharwad – banana tissue culture Kannada
-    thumbnail: 'https://img.youtube.com/vi/EhE8GIkOXPU/mqdefault.jpg',
+    thumbnail: 'https://youtu.be/V_sY2GtAbBk?si=aZ0exmTYKY77bIiG',
     views: '1.9L',
     tags: ['banana', 'tissue culture', 'horticulture'],
   },
