@@ -22,7 +22,8 @@ app.set('trust proxy', 1); // Fix for express-rate-limit X-Forwarded-For warning
 app.use(cors({
   origin: [
     'http://localhost:3000',
-    'https://kisan-platform-yl3f.vercel.app'
+    'https://kisan-platform-yl3f.vercel.app',
+    'https://kisan-platform-tp85.vercel.app'
   ]
 }));
 app.use(express.json());
