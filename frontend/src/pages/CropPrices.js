@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
 
+const API_BASE = process.env.REACT_APP_API_URL || 'http://localhost:5000/api';
+
 export default function CropPrices() {
   const [prices, setPrices] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -24,10 +26,9 @@ export default function CropPrices() {
     async function loadOptions() {
       setLoadingOptions(true);
       try {
-        // Load states that actually have data
         const [statesRes, cropsRes] = await Promise.all([
-          fetch('/api/prices/states').then(r => r.json()),
-          fetch('/api/prices/commodities').then(r => r.json()),
+          fetch(`${API_BASE}/prices/states`).then(r => r.json()),
+          fetch(`${API_BASE}/prices/commodities`).then(r => r.json()),
         ]);
         if (statesRes.data) setAvailableStates(statesRes.data);
         if (cropsRes.data) setAvailableCrops(cropsRes.data);
@@ -38,7 +39,6 @@ export default function CropPrices() {
       }
     }
     loadOptions();
-    // Load initial data with no filters — show whatever is available
     fetchPrices(0, { state: '', commodity: '' });
   }, []);
 
@@ -47,20 +47,17 @@ export default function CropPrices() {
     const newFilters = { state: newState, commodity: '' };
     setFilters(newFilters);
 
-    // Fetch to discover which crops exist in this state
     if (newState) {
       try {
-        const res = await fetch(`/api/prices?state=${encodeURIComponent(newState)}&limit=500`);
+        const res = await fetch(`${API_BASE}/prices?state=${encodeURIComponent(newState)}&limit=500`);
         const data = await res.json();
         if (data.data?.length > 0) {
-          // Extract unique commodities that actually have data for this state
           const uniqueCrops = [...new Set(data.data.map(p => p.commodity))].sort();
           setAvailableCrops(uniqueCrops);
         }
       } catch (e) { console.error(e); }
     } else {
-      // No state selected — reload full crop list
-      fetch('/api/prices/commodities').then(r => r.json()).then(d => {
+      fetch(`${API_BASE}/prices/commodities`).then(r => r.json()).then(d => {
         if (d.data) setAvailableCrops(d.data);
       });
     }
@@ -78,7 +75,7 @@ export default function CropPrices() {
       params.set('limit', LIMIT);
       params.set('offset', newOffset);
 
-      const res = await fetch(`/api/prices?${params}`);
+      const res = await fetch(`${API_BASE}/prices?${params}`);
       const data = await res.json();
       setPrices(data.data || []);
       setTotal(data.total || 0);
@@ -97,7 +94,6 @@ export default function CropPrices() {
     setTimeout(() => setAlertSet(false), 4000);
   }
 
-  // Quick crop chips — only show crops that exist in current state
   const quickCrops = availableCrops.slice(0, 10);
 
   return (
@@ -129,7 +125,7 @@ export default function CropPrices() {
         </div>
       )}
 
-      {/* Filters — only available options */}
+      {/* Filters */}
       <div className="filter-bar">
         <select
           value={filters.state}
@@ -160,7 +156,7 @@ export default function CropPrices() {
         </button>
       </div>
 
-      {/* Quick crop chips — only crops with data */}
+      {/* Quick crop chips */}
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 20 }}>
         {quickCrops.map(crop => (
           <button key={crop}
@@ -276,7 +272,7 @@ export default function CropPrices() {
                   ))}
                 </div>
 
-                {/* 30-day trend chart — fixed dataKey to modal_price */}
+                {/* 30-day trend chart */}
                 <div style={{ marginBottom: 20 }}>
                   <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8, color: '#374151' }}>30-Day Price Trend</div>
                   {selectedPrice.price_history && selectedPrice.price_history.length > 0 ? (
@@ -334,7 +330,7 @@ export default function CropPrices() {
 
                 {/* Find best mandi */}
                 <button className="btn-secondary btn-full btn-sm" onClick={async () => {
-                  const res = await fetch(`/api/prices/top?commodity=${encodeURIComponent(selectedPrice.commodity)}`);
+                  const res = await fetch(`${API_BASE}/prices/top?commodity=${encodeURIComponent(selectedPrice.commodity)}`);
                   const d = await res.json();
                   if (d.data?.length > 0) {
                     alert(`Best mandi for ${selectedPrice.commodity}:\n\n${d.data.slice(0, 5).map((m, i) => `${i + 1}. ${m.market}, ${m.state} — ₹${m.modal_price.toLocaleString()}/qtl`).join('\n')}`);
