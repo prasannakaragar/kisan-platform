@@ -1,5 +1,8 @@
 const express = require('express');
 const router = express.Router();
+const { getSoilData, getSoilHealthTip } = require('../data/soilData'); // adjust path if needed
+
+// ─── Static crop recommendation data ──────────────────────────────────────────
 
 const CROP_DATA = {
   'Karnataka': {
@@ -47,40 +50,137 @@ const DEFAULT_CROPS = [
   { crop: 'Maize', season: 'Kharif', soil: 'Any', investment_per_acre: 14000, expected_yield_quintal: 25, market_price_per_quintal: 2000, profit_per_acre: 36000, risk: 'low', water_need: 'medium', duration_days: 90, tips: 'Huge poultry feed demand. Easy to grow. Multiple harvests possible.' }
 ];
 
+// ─── Soil-based crop suitability scoring ─────────────────────────────────────
+
+/**
+ * Boost or penalise a crop's score based on real soil data.
+ * Returns a numeric delta to add to profit_per_acre for sorting.
+ */
+function soilCompatibilityScore(crop, soilData) {
+  if (!soilData) return 0;
+  let score = 0;
+  const { soil_type, soil_ph, moisture_level } = soilData;
+
+  // Soil type match
+  const soilTypeMap = {
+    'Black':    ['Cotton', 'Soybean', 'Sorghum', 'Wheat', 'Paddy', 'Sunflower'],
+    'Alluvial': ['Wheat', 'Paddy', 'Maize', 'Sugarcane', 'Vegetables', 'Onion', 'Tomato'],
+    'Red':      ['Groundnut', 'Maize', 'Millets', 'Pulses', 'Chilli', 'Sunflower'],
+    'Laterite': ['Cashew', 'Tea', 'Coffee', 'Rubber', 'Tapioca', 'Rice'],
+    'Desert':   ['Bajra', 'Moth Bean', 'Cluster Bean', 'Sesame', 'Mustard']
+  };
+  const goodCrops = soilTypeMap[soil_type] || [];
+  if (goodCrops.some(c => crop.crop.toLowerCase().includes(c.toLowerCase()))) {
+    score += 15000; // bonus for soil-type match
+  }
+
+  // pH suitability
+  if (soil_ph >= 6.0 && soil_ph <= 7.5) score += 5000;   // neutral range — suits most crops
+  else if (soil_ph < 5.5 || soil_ph > 8.0) score -= 5000; // extreme pH — penalty
+
+  // Water need vs moisture
+  if (moisture_level === 'Low' && crop.water_need === 'high') score -= 20000;  // bad match
+  if (moisture_level === 'Low' && crop.water_need === 'low')  score += 10000;  // great match
+  if (moisture_level === 'High' && crop.water_need === 'high') score += 10000; // great match
+
+  return score;
+}
+
+// ─── Routes ───────────────────────────────────────────────────────────────────
+
 router.post('/recommend', (req, res) => {
-  const { state, district, land_acres, soil_type, water_availability, season } = req.body;
+  const { state, district, land_acres, water_availability, season } = req.body;
   let recommendations = [];
 
+  // Get crop list from static data
   if (state && CROP_DATA[state] && district && CROP_DATA[state][district]) {
     recommendations = CROP_DATA[state][district];
   } else if (state && CROP_DATA[state]) {
-    const firstDistrict = Object.values(CROP_DATA[state])[0];
-    recommendations = firstDistrict;
+    recommendations = Object.values(CROP_DATA[state])[0];
   } else {
     recommendations = DEFAULT_CROPS;
   }
 
-  if (water_availability === 'low') {
+  // ── NEW: fetch real soil data from dataset ────────────────────────────────
+  const soilData = getSoilData(district, state);
+  // If dataset has soil data for this region, override water_availability from it
+  const effectiveWaterAvail = soilData
+    ? soilData.moisture_level.toLowerCase()  // 'high' | 'moderate' | 'low'
+    : water_availability;
+
+  // Filter by water availability
+  if (effectiveWaterAvail === 'low') {
     recommendations = recommendations.filter(c => c.water_need !== 'high');
   }
+
+  // Filter by season
   if (season) {
-    recommendations = recommendations.filter(c => c.season.toLowerCase().includes(season.toLowerCase()) || c.season === 'Year round');
+    recommendations = recommendations.filter(c =>
+      c.season.toLowerCase().includes(season.toLowerCase()) || c.season === 'Year round'
+    );
   }
 
-  const result = recommendations.map(c => ({
-    ...c,
-    total_investment: Math.round(c.investment_per_acre * (land_acres || 1)),
-    expected_profit: Math.round(c.profit_per_acre * (land_acres || 1)),
-    total_revenue: Math.round(c.expected_yield_quintal * c.market_price_per_quintal * (land_acres || 1))
-  })).sort((a, b) => b.profit_per_acre - a.profit_per_acre);
+  // ── NEW: sort with soil compatibility scoring ─────────────────────────────
+  const result = recommendations
+    .map(c => ({
+      ...c,
+      total_investment: Math.round(c.investment_per_acre * (land_acres || 1)),
+      expected_profit:  Math.round(c.profit_per_acre * (land_acres || 1)),
+      total_revenue:    Math.round(c.expected_yield_quintal * c.market_price_per_quintal * (land_acres || 1)),
+      // soil compatibility info injected into each recommendation
+      soil_match_note: soilData
+        ? `Soil: ${soilData.soil_type}, pH ${soilData.soil_ph}, Moisture: ${soilData.moisture_level}, Organic Carbon: ${soilData.organic_carbon}`
+        : null,
+      _sort_score: c.profit_per_acre + soilCompatibilityScore(c, soilData)
+    }))
+    .sort((a, b) => b._sort_score - a._sort_score)
+    .map(({ _sort_score, ...rest }) => rest); // strip internal sort key
 
-  res.json({ success: true, state, district, data: result.length > 0 ? result : DEFAULT_CROPS });
+  // ── NEW: soil health summary for the response ─────────────────────────────
+  const soilSummary = soilData
+    ? {
+        region_matched: `${district || ''}, ${state || ''}`.trim().replace(/^,\s*|,\s*$/, ''),
+        soil_type:       soilData.soil_type,
+        soil_ph:         soilData.soil_ph,
+        moisture_level:  soilData.moisture_level,
+        organic_carbon:  soilData.organic_carbon,
+        health_tip:      getSoilHealthTip(soilData)
+      }
+    : null;
+
+  res.json({
+    success: true,
+    state,
+    district,
+    soil_data: soilSummary,          // <-- new field in response
+    data: result.length > 0 ? result : DEFAULT_CROPS
+  });
 });
 
-router.get('/states', (req, res) => res.json({ success: true, data: Object.keys(CROP_DATA) }));
+router.get('/states', (req, res) =>
+  res.json({ success: true, data: Object.keys(CROP_DATA) })
+);
+
 router.get('/districts/:state', (req, res) => {
-  const districts = CROP_DATA[req.params.state] ? Object.keys(CROP_DATA[req.params.state]) : [];
+  const districts = CROP_DATA[req.params.state]
+    ? Object.keys(CROP_DATA[req.params.state])
+    : [];
   res.json({ success: true, data: districts });
+});
+
+// ── NEW: endpoint to look up soil data directly ───────────────────────────────
+router.get('/soil', (req, res) => {
+  const { district, state } = req.query;
+  const soilData = getSoilData(district, state);
+  if (!soilData) {
+    return res.status(404).json({ success: false, message: 'No soil data found for this region.' });
+  }
+  res.json({
+    success: true,
+    region: `${district || ''}, ${state || ''}`.trim(),
+    ...soilData,
+    health_tip: getSoilHealthTip(soilData)
+  });
 });
 
 module.exports = router;
