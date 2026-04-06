@@ -61,7 +61,7 @@ export default function Videos() {
       {/* Header */}
       <div className="page-header">
         <h1>🎬 Learn Farming Videos</h1>
-        <p>DD Kisan, ICAR, Krishi Jagran tutorials — click any title to watch on YouTube</p>
+        <p>DD Kisan, ICAR, Krishi Jagran tutorials — click any title to search on YouTube</p>
       </div>
 
       {/* Filter bar */}
@@ -128,7 +128,7 @@ function VideoLink({ video }) {
 
   return (
     <a
-      href={`https://www.youtube.com/watch?v=${video.youtube_id}`}
+      href={video.youtube_url}               // ✅ uses the correct YouTube search URL
       target="_blank"
       rel="noopener noreferrer"
       style={{
