@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
 
 const API_BASE = process.env.REACT_APP_API_URL || 'http://localhost:5000/api';
@@ -25,34 +25,46 @@ export default function Videos() {
   const [loading, setLoading]     = useState(true);
   const [filters, setFilters]     = useState({ crop: '', language: '', level: '', search: '' });
 
-  useEffect(() => {
-    Promise.all([
-      api('/videos/crops').then(r => setCrops(r.data)),
-      api('/videos/languages').then(r => setLanguages(r.data)),
-    ]);
-    fetchVideos();
-  }, []);
-
-  async function fetchVideos() {
+  // ✅ FIX 1: Accept currentFilters as a parameter so we never use stale closure state
+  const fetchVideos = useCallback(async (currentFilters) => {
     setLoading(true);
     try {
-      const r = await api('/videos', { params: filters });
+      const r = await api('/videos', { params: currentFilters });
       setVideos(r.data);
     } catch (e) {
       console.error(e);
     } finally {
       setLoading(false);
     }
-  }
+  }, []);
 
-  // Group by crop for default view
+  useEffect(() => {
+    // Fetch crops and languages in parallel, then fetch all videos
+    Promise.all([
+      api('/videos/crops').then(r => setCrops(r.data)),
+      api('/videos/languages').then(r => setLanguages(r.data)),
+    ]);
+    fetchVideos({ crop: '', language: '', level: '', search: '' });
+  }, [fetchVideos]);
+
+  // ✅ FIX 2: Auto-fetch whenever any dropdown filter changes (except search — that needs Enter/button)
+  const handleFilterChange = (key, value) => {
+    const updated = { ...filters, [key]: value };
+    setFilters(updated);
+    if (key !== 'search') {
+      fetchVideos(updated);
+    }
+  };
+
+  // ✅ FIX 3: Group by ALL crops from the server, not just those present in current videos
+  // This ensures every crop section always appears (even if empty after a filter)
   const grouped = crops.reduce((acc, crop) => {
     const vids = videos.filter(v => v.crop === crop);
     if (vids.length) acc[crop] = vids;
     return acc;
   }, {});
 
-  // Flat list when crop or search filter is active
+  // Show flat list when crop-specific or search filter is active
   const showFlat = !!(filters.crop || filters.search);
 
   return (
@@ -61,7 +73,7 @@ export default function Videos() {
       {/* Header */}
       <div className="page-header">
         <h1>🎬 Learn Farming Videos</h1>
-        <p>DD Kisan, ICAR, Krishi Jagran tutorials — click any title to search on YouTube</p>
+        <p>DD Kisan, ICAR, Krishi Jagran tutorials — click any title to watch on YouTube</p>
       </div>
 
       {/* Filter bar */}
@@ -69,24 +81,36 @@ export default function Videos() {
         <input
           placeholder="Search videos..."
           value={filters.search}
-          onChange={e => setFilters(f => ({ ...f, search: e.target.value }))}
-          onKeyDown={e => e.key === 'Enter' && fetchVideos()}
+          onChange={e => handleFilterChange('search', e.target.value)}
+          // ✅ FIX 4: onKeyDown now passes current updated filters correctly
+          onKeyDown={e => {
+            if (e.key === 'Enter') fetchVideos({ ...filters, search: e.target.value });
+          }}
         />
-        <select value={filters.crop} onChange={e => setFilters(f => ({ ...f, crop: e.target.value }))}>
+        <select
+          value={filters.crop}
+          onChange={e => handleFilterChange('crop', e.target.value)}
+        >
           <option value="">All Crops</option>
           {crops.map(c => <option key={c}>{c}</option>)}
         </select>
-        <select value={filters.language} onChange={e => setFilters(f => ({ ...f, language: e.target.value }))}>
+        <select
+          value={filters.language}
+          onChange={e => handleFilterChange('language', e.target.value)}
+        >
           <option value="">All Languages</option>
           {languages.map(l => <option key={l}>{l}</option>)}
         </select>
-        <select value={filters.level} onChange={e => setFilters(f => ({ ...f, level: e.target.value }))}>
+        <select
+          value={filters.level}
+          onChange={e => handleFilterChange('level', e.target.value)}
+        >
           <option value="">All Levels</option>
           <option value="Beginner">Beginner</option>
           <option value="Intermediate">Intermediate</option>
           <option value="Advanced">Advanced</option>
         </select>
-        <button className="btn-primary" onClick={fetchVideos}>Search</button>
+        <button className="btn-primary" onClick={() => fetchVideos(filters)}>Search</button>
       </div>
 
       {loading && <div className="loading">Loading videos...</div>}
@@ -99,17 +123,20 @@ export default function Videos() {
         </div>
       )}
 
-      {/* Flat list when filtering */}
-      {!loading && showFlat && (
+      {/* Flat list when filtering by crop or search */}
+      {!loading && showFlat && videos.length > 0 && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           {videos.map(v => <VideoLink key={v.id} video={v} />)}
         </div>
       )}
 
-      {/* Grouped by crop (default) */}
+      {/* Grouped by crop (default — no crop/search filter active) */}
       {!loading && !showFlat && Object.entries(grouped).map(([crop, vids]) => (
         <div key={crop} style={{ marginBottom: 28 }}>
-          <h3 style={{ fontSize: 16, fontWeight: 700, marginBottom: 10, paddingBottom: 8, borderBottom: '2px solid #e5e7eb' }}>
+          <h3 style={{
+            fontSize: 16, fontWeight: 700, marginBottom: 10,
+            paddingBottom: 8, borderBottom: '2px solid #e5e7eb',
+          }}>
             🌾 {crop}
           </h3>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -128,7 +155,7 @@ function VideoLink({ video }) {
 
   return (
     <a
-      href={video.youtube_url}               // ✅ uses the correct YouTube search URL
+      href={video.youtube_url}
       target="_blank"
       rel="noopener noreferrer"
       style={{
@@ -138,17 +165,29 @@ function VideoLink({ video }) {
         textDecoration: 'none', color: 'inherit',
         transition: 'background 0.15s, border-color 0.15s',
       }}
-      onMouseEnter={e => { e.currentTarget.style.background = '#f9fafb'; e.currentTarget.style.borderColor = '#d1d5db'; }}
-      onMouseLeave={e => { e.currentTarget.style.background = '#fff'; e.currentTarget.style.borderColor = '#e5e7eb'; }}
+      onMouseEnter={e => {
+        e.currentTarget.style.background = '#f9fafb';
+        e.currentTarget.style.borderColor = '#d1d5db';
+      }}
+      onMouseLeave={e => {
+        e.currentTarget.style.background = '#fff';
+        e.currentTarget.style.borderColor = '#e5e7eb';
+      }}
     >
       {/* Red play icon */}
-      <div style={{ flexShrink: 0, width: 32, height: 32, background: '#ff0000', borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <div style={{
+        flexShrink: 0, width: 32, height: 32, background: '#ff0000',
+        borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center',
+      }}>
         <span style={{ color: '#fff', fontSize: 13, marginLeft: 2 }}>▶</span>
       </div>
 
       {/* Title + meta */}
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontWeight: 600, fontSize: 14, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+        <div style={{
+          fontWeight: 600, fontSize: 14,
+          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+        }}>
           {video.title}
         </div>
         <div style={{ fontSize: 12, marginTop: 2 }}>
@@ -158,7 +197,11 @@ function VideoLink({ video }) {
       </div>
 
       {/* Level badge */}
-      <span style={{ flexShrink: 0, fontSize: 11, fontWeight: 600, padding: '3px 9px', borderRadius: 20, background: lc.bg, color: lc.color }}>
+      <span style={{
+        flexShrink: 0, fontSize: 11, fontWeight: 600,
+        padding: '3px 9px', borderRadius: 20,
+        background: lc.bg, color: lc.color,
+      }}>
         {video.level}
       </span>
 
