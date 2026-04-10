@@ -1,178 +1,331 @@
-/**
- * Smart Irrigation Recommendation Route
- * POST /api/irrigation/predict
- *
- * Calculates recommended irrigation time based on:
- *  - Crop type (base water requirement in minutes)
- *  - Soil type (absorption factor)
- *  - Temperature (weather factor)
- *  - Rain prediction (skip irrigation if rain expected)
- */
-
 const express = require('express');
-const router  = express.Router();
+const axios = require('axios');
+const router = express.Router();
 
-// ─── Data Tables ────────────────────────────────────────────────────────────
-
-/**
- * Base water requirement (minutes per irrigation session).
- * Sources: ICAR / Indian agronomy guidelines.
- */
-const CROP_BASE_WATER = {
-  rice:       30,
-  wheat:      20,
-  maize:      25,
-  cotton:     35,
-  sugarcane:  45,
-  soybean:    22,
-  groundnut:  18,
-  mustard:    15,
-  sorghum:    20,
-  barley:     17,
-  millet:     14,
-  sunflower:  19,
-  tomato:     25,
-  potato:     28,
-  onion:      22,
-  chickpea:   16,
-  lentil:     14,
-  pigeonpea:  20,
-  jute:       30,
-  tobacco:    24,
+// ─── WMO Weather Code → human-readable description & icon ────────────────────
+const WMO_CODES = {
+  0:  { desc: 'Clear sky',                  icon: '☀️' },
+  1:  { desc: 'Mainly clear',               icon: '🌤️' },
+  2:  { desc: 'Partly cloudy',              icon: '⛅' },
+  3:  { desc: 'Overcast',                   icon: '☁️' },
+  45: { desc: 'Foggy',                      icon: '🌫️' },
+  48: { desc: 'Depositing rime fog',        icon: '🌫️' },
+  51: { desc: 'Light drizzle',              icon: '🌦️' },
+  53: { desc: 'Moderate drizzle',           icon: '🌦️' },
+  55: { desc: 'Dense drizzle',              icon: '🌧️' },
+  61: { desc: 'Slight rain',                icon: '🌧️' },
+  63: { desc: 'Moderate rain',              icon: '🌧️' },
+  65: { desc: 'Heavy rain',                 icon: '🌧️' },
+  71: { desc: 'Slight snowfall',            icon: '🌨️' },
+  73: { desc: 'Moderate snowfall',          icon: '🌨️' },
+  75: { desc: 'Heavy snowfall',             icon: '❄️' },
+  80: { desc: 'Slight rain showers',        icon: '🌦️' },
+  81: { desc: 'Moderate rain showers',      icon: '🌧️' },
+  82: { desc: 'Violent rain showers',       icon: '⛈️' },
+  95: { desc: 'Thunderstorm',               icon: '⛈️' },
+  96: { desc: 'Thunderstorm with hail',     icon: '⛈️' },
+  99: { desc: 'Thunderstorm + heavy hail',  icon: '⛈️' },
 };
 
-/**
- * Soil moisture-retention factor.
- * Sandy soil drains fast (needs more water),
- * clay retains well (needs less).
- */
-const SOIL_FACTOR = {
-  sandy:      1.3,
-  loamy:      1.0,
-  clay:       0.8,
-  silt:       0.95,
-  peat:       0.7,
-  chalky:     1.1,
-  black:      0.85,
-  red:        1.15,
-  laterite:   1.2,
-  alluvial:   0.9,
-};
+const RAINY_CODES = [51, 53, 55, 61, 63, 65, 80, 81, 82, 95, 96, 99];
 
-/**
- * Derive a weather factor from temperature.
- * Higher temps mean faster evapotranspiration → more water needed.
- *
- * @param {number} temperature - Celsius
- * @returns {number} factor
- */
-function getWeatherFactor(temperature) {
-  if (temperature > 35) return 1.3;
-  if (temperature > 25) return 1.1;
-  return 0.9;
+function isRainyWeatherCode(code) {
+  return RAINY_CODES.includes(code);
 }
 
-/**
- * Validate incoming request body.
- * Returns an error string if invalid, or null if valid.
- *
- * @param {{ cropType, soilType, temperature, rainPrediction }} body
- * @returns {string|null}
- */
-function validateInput({ cropType, soilType, temperature, rainPrediction }) {
-  if (!cropType  || !CROP_BASE_WATER[cropType.toLowerCase()])
-    return `Invalid crop type: "${cropType}". Supported: ${Object.keys(CROP_BASE_WATER).join(', ')}.`;
+// ─── GET /weather — fetch live weather for given lat/lng ──────────────────────
+router.get('/weather', async (req, res) => {
+  const { lat, lng } = req.query;
 
-  if (!soilType  || !SOIL_FACTOR[soilType.toLowerCase()])
-    return `Invalid soil type: "${soilType}". Supported: ${Object.keys(SOIL_FACTOR).join(', ')}.`;
-
-  const temp = Number(temperature);
-  if (isNaN(temp) || temperature === '' || temperature === null || temperature === undefined)
-    return 'Temperature must be a valid number.';
-  if (temp < -10 || temp > 60)
-    return 'Temperature must be between -10°C and 60°C.';
-
-  const rain = String(rainPrediction).toLowerCase();
-  if (rain !== 'yes' && rain !== 'no')
-    return 'Rain prediction must be "yes" or "no".';
-
-  return null;
-}
-
-// ─── Route ───────────────────────────────────────────────────────────────────
-
-/**
- * POST /api/irrigation/predict
- * Body: { cropType, soilType, temperature, rainPrediction }
- * Returns: { irrigationTime, details }
- */
-router.post('/predict', (req, res) => {
-  const { cropType, soilType, temperature, rainPrediction } = req.body;
-
-  // Validate
-  const validationError = validateInput({ cropType, soilType, temperature, rainPrediction });
-  if (validationError) {
-    return res.status(400).json({ error: validationError });
+  if (!lat || !lng || isNaN(Number(lat)) || isNaN(Number(lng))) {
+    return res.status(400).json({
+      success: false,
+      error: 'lat and lng query parameters are required (valid numbers).',
+    });
   }
 
-  const crop  = cropType.toLowerCase();
-  const soil  = soilType.toLowerCase();
-  const temp  = Number(temperature);
-  const rain  = String(rainPrediction).toLowerCase();
+  try {
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lng}&current=temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m,surface_pressure&hourly=precipitation_probability,temperature_2m,weather_code&forecast_days=1&timezone=auto`;
 
-  // If rain is predicted, skip irrigation entirely
-  if (rain === 'yes') {
+    const { data } = await axios.get(url, { timeout: 8000 });
+
+    const current = data.current || {};
+    const hourly  = data.hourly  || {};
+    const weatherCode = current.weather_code ?? 0;
+    const wmo = WMO_CODES[weatherCode] || { desc: 'Unknown', icon: '🌡️' };
+
+    const precipProbs = (hourly.precipitation_probability || []).slice(0, 6);
+    const maxRainProb = precipProbs.length > 0 ? Math.max(...precipProbs) : 0;
+    const isCurrentlyRaining = isRainyWeatherCode(weatherCode);
+    const rainLikely = maxRainProb >= 50 || isCurrentlyRaining;
+
+    const hourlyForecast = [];
+    const nowHour = new Date().getHours();
+    for (let i = 0; i < Math.min(6, (hourly.time || []).length); i++) {
+      const hCode = hourly.weather_code?.[i] ?? 0;
+      const hWmo  = WMO_CODES[hCode] || { desc: 'Unknown', icon: '🌡️' };
+      hourlyForecast.push({
+        time:             hourly.time?.[i] || '',
+        hour:             (nowHour + i) % 24,
+        temperature:      hourly.temperature_2m?.[i],
+        precipProbability: hourly.precipitation_probability?.[i] ?? 0,
+        weatherCode:      hCode,
+        icon:             hWmo.icon,
+        desc:             hWmo.desc,
+      });
+    }
+
+    res.json({
+      success: true,
+      weather: {
+        temperature:        current.temperature_2m,
+        feelsLike:          current.apparent_temperature,
+        humidity:           current.relative_humidity_2m,
+        windSpeed:          current.wind_speed_10m,
+        pressure:           current.surface_pressure,
+        weatherCode,
+        description:        wmo.desc,
+        icon:               wmo.icon,
+        rainProbability:    maxRainProb,
+        rainPrediction:     rainLikely ? 'yes' : 'no',
+        isCurrentlyRaining,
+        hourlyForecast,
+      },
+      timezone: data.timezone,
+    });
+  } catch (err) {
+    console.error('Weather API error:', err.message);
+    res.status(502).json({
+      success: false,
+      error: 'Failed to fetch weather data. Please try again or enter details manually.',
+    });
+  }
+});
+
+// ─── Crop Water Requirements (base litres per sq metre per session) ───────────
+// More realistic agronomic values — litres/m²
+const CROP_WATER = {
+  rice:        8.0,
+  wheat:       5.5,
+  maize:       6.5,
+  cotton:      7.0,
+  sugarcane:   9.0,
+  soybean:     5.8,
+  groundnut:   4.8,
+  mustard:     4.2,
+  millet:      3.5,
+  barley:      4.5,
+  sunflower:   5.5,
+  chickpea:    3.8,
+  pigeon_pea:  4.3,
+  sesame:      3.6,
+  jute:        7.5,
+  potato:      6.2,
+  onion:       5.0,
+  tomato:      6.8,
+  chilli:      5.5,
+  turmeric:    6.0,
+};
+
+// ─── Soil Factor (water retention — affects how much water is needed) ─────────
+// sandy drains fast → needs more; clay retains → needs less
+const SOIL_FACTOR = {
+  sandy:    1.30,
+  loamy:    1.00,
+  clay:     0.80,
+  silt:     0.90,
+  peaty:    0.70,
+  chalky:   1.10,
+  saline:   1.20,
+  black:    0.85,
+  red:      1.05,
+  laterite: 1.15,
+  alluvial: 0.95,
+};
+
+// ─── Climate Factor ────────────────────────────────────────────────────────────
+// Combines temperature + humidity to model actual evapotranspiration demand.
+// High temp + low humidity = crop loses more water → needs more irrigation.
+// Low temp + high humidity = less demand.
+function getClimateFactor(temperature, humidity) {
+  // Temperature component: scaled 0.8 – 1.4
+  let tempFactor;
+  if      (temperature > 40) tempFactor = 1.40;
+  else if (temperature > 35) tempFactor = 1.30;
+  else if (temperature > 28) tempFactor = 1.15;
+  else if (temperature > 20) tempFactor = 1.00;
+  else if (temperature > 12) tempFactor = 0.90;
+  else                        tempFactor = 0.80;
+
+  // Humidity component: drier air increases evaporation demand
+  // humidity 0-30%: +15%, 31-50%: +5%, 51-70%: neutral, 71-100%: -10%
+  let humFactor;
+  if      (humidity <= 30) humFactor = 1.15;
+  else if (humidity <= 50) humFactor = 1.05;
+  else if (humidity <= 70) humFactor = 1.00;
+  else                      humFactor = 0.90;
+
+  // Combined climate factor (average of both components)
+  return Math.round(((tempFactor + humFactor) / 2) * 100) / 100;
+}
+
+// ─── Compute water for a single crop ─────────────────────────────────────────
+function computeWater(cropKey, soilKey, temperature, humidity) {
+  const base          = CROP_WATER[cropKey];
+  const soilFactor    = SOIL_FACTOR[soilKey];
+  const climateFactor = getClimateFactor(temperature, humidity);
+  const litresPerSqM  = Math.round(base * soilFactor * climateFactor * 10) / 10;
+  return { base, soilFactor, climateFactor, litresPerSqM };
+}
+
+// ─── Validation helper ────────────────────────────────────────────────────────
+function validateInput(body) {
+  const errors = [];
+  const { cropType, soilType, temperature, humidity, rainPrediction } = body;
+
+  if (!cropType || typeof cropType !== 'string') {
+    errors.push('cropType is required.');
+  } else if (!CROP_WATER[cropType.toLowerCase()]) {
+    errors.push(`Unknown crop type: "${cropType}". Valid options: ${Object.keys(CROP_WATER).join(', ')}`);
+  }
+
+  if (!soilType || typeof soilType !== 'string') {
+    errors.push('soilType is required.');
+  } else if (!SOIL_FACTOR[soilType.toLowerCase()]) {
+    errors.push(`Unknown soil type: "${soilType}". Valid options: ${Object.keys(SOIL_FACTOR).join(', ')}`);
+  }
+
+  if (temperature === undefined || temperature === null || temperature === '') {
+    errors.push('temperature is required.');
+  } else if (isNaN(Number(temperature))) {
+    errors.push('temperature must be a number.');
+  } else if (Number(temperature) < -10 || Number(temperature) > 60) {
+    errors.push('temperature must be between -10°C and 60°C.');
+  }
+
+  // humidity is optional (defaults to 50 if not provided)
+  if (humidity !== undefined && humidity !== null && humidity !== '') {
+    if (isNaN(Number(humidity)) || Number(humidity) < 0 || Number(humidity) > 100) {
+      errors.push('humidity must be a number between 0 and 100.');
+    }
+  }
+
+  if (rainPrediction === undefined || rainPrediction === null || rainPrediction === '') {
+    errors.push('rainPrediction is required (yes / no).');
+  }
+
+  return errors;
+}
+
+// ─── GET / — return available crop & soil options ─────────────────────────────
+router.get('/', (req, res) => {
+  res.json({
+    success: true,
+    crops: Object.keys(CROP_WATER).map(key => ({
+      value:     key,
+      label:     key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()),
+      baseWater: CROP_WATER[key],
+    })),
+    soils: Object.keys(SOIL_FACTOR).map(key => ({
+      value:  key,
+      label:  key.replace(/\b\w/g, c => c.toUpperCase()),
+      factor: SOIL_FACTOR[key],
+    })),
+  });
+});
+
+// ─── POST /predict — compute irrigation for selected crop ─────────────────────
+router.post('/predict', (req, res) => {
+  const validationErrors = validateInput(req.body);
+  if (validationErrors.length > 0) {
+    return res.status(400).json({ success: false, errors: validationErrors });
+  }
+
+  const cropType       = req.body.cropType.toLowerCase();
+  const soilType       = req.body.soilType.toLowerCase();
+  const temperature    = Number(req.body.temperature);
+  const humidity       = req.body.humidity !== undefined ? Number(req.body.humidity) : 50;
+  const rainPrediction = String(req.body.rainPrediction).toLowerCase();
+
+  if (rainPrediction === 'yes') {
     return res.json({
-      irrigationTime: null,
-      message:        'No irrigation needed today',
+      success: true,
+      irrigationNeeded: false,
+      message: 'No irrigation needed today',
       details: {
-        cropType:      crop,
-        soilType:      soil,
-        temperature:   temp,
-        rainPredicted: true,
-        reason:        'Rain is expected — natural precipitation will provide sufficient moisture.',
+        reason: 'Rain is predicted for today — natural rainfall will provide sufficient water.',
+        cropType, soilType, temperature, humidity, rainPrediction: 'yes',
       },
     });
   }
 
-  // Calculate irrigation time
-  const baseCropWater = CROP_BASE_WATER[crop];
-  const soilFactor    = SOIL_FACTOR[soil];
-  const weatherFactor = getWeatherFactor(temp);
-  const irrigationTime = Math.round(baseCropWater * soilFactor * weatherFactor);
+  const { base, soilFactor, climateFactor, litresPerSqM } = computeWater(cropType, soilType, temperature, humidity);
 
-  return res.json({
-    irrigationTime: `${irrigationTime} minutes`,
-    message:        `Recommended irrigation time: ${irrigationTime} minutes`,
+  res.json({
+    success:          true,
+    irrigationNeeded: true,
+    irrigationTime:   `${litresPerSqM} L/m²`,
     details: {
-      cropType:      crop,
-      soilType:      soil,
-      temperature:   temp,
-      rainPredicted: false,
-      baseCropWater,
+      baseCropWater: base,
       soilFactor,
-      weatherFactor,
-      formula:       `${baseCropWater} × ${soilFactor} (soil) × ${weatherFactor} (weather) = ${irrigationTime} min`,
+      climateFactor,
+      temperature,
+      humidity,
+      cropType,
+      soilType,
+      rainPrediction: 'no',
+      formula: `${base} × ${soilFactor} (soil) × ${climateFactor} (climate) = ${litresPerSqM} L/m²`,
     },
   });
 });
 
-/**
- * GET /api/irrigation/options
- * Returns all supported crops and soil types for the frontend dropdowns.
- */
-router.get('/options', (req, res) => {
+// ─── POST /predict-all — compute irrigation for ALL crops at once ─────────────
+// Frontend sends: { soilType, temperature, humidity, rainPrediction }
+// Returns water needs for every crop so farmer sees the full picture
+router.post('/predict-all', (req, res) => {
+  const { soilType, temperature, humidity, rainPrediction } = req.body;
+
+  if (!soilType || !SOIL_FACTOR[soilType.toLowerCase()]) {
+    return res.status(400).json({ success: false, error: 'Valid soilType is required.' });
+  }
+  if (temperature === undefined || isNaN(Number(temperature))) {
+    return res.status(400).json({ success: false, error: 'Valid temperature is required.' });
+  }
+
+  const soil    = soilType.toLowerCase();
+  const temp    = Number(temperature);
+  const hum     = humidity !== undefined ? Number(humidity) : 50;
+  const isRain  = String(rainPrediction).toLowerCase() === 'yes';
+
+  if (isRain) {
+    return res.json({
+      success: true,
+      rainPrediction: 'yes',
+      message: 'No irrigation needed — rain predicted.',
+      crops: [],
+    });
+  }
+
+  const crops = Object.keys(CROP_WATER).map(key => {
+    const { litresPerSqM, soilFactor, climateFactor } = computeWater(key, soil, temp, hum);
+    return {
+      value:       key,
+      label:       key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()),
+      litresPerSqM,
+      soilFactor,
+      climateFactor,
+      urgency:     litresPerSqM > 7 ? 'high' : litresPerSqM > 5 ? 'medium' : 'low',
+    };
+  }).sort((a, b) => b.litresPerSqM - a.litresPerSqM); // highest water need first
+
   res.json({
-    crops: Object.keys(CROP_BASE_WATER).map(key => ({
-      value: key,
-      label: key.charAt(0).toUpperCase() + key.slice(1),
-      baseWater: CROP_BASE_WATER[key],
-    })),
-    soilTypes: Object.keys(SOIL_FACTOR).map(key => ({
-      value: key,
-      label: key.charAt(0).toUpperCase() + key.slice(1),
-      factor: SOIL_FACTOR[key],
-    })),
+    success: true,
+    rainPrediction: 'no',
+    soilType: soil,
+    temperature: temp,
+    humidity: hum,
+    climateFactor: getClimateFactor(temp, hum),
+    crops,
   });
 });
 

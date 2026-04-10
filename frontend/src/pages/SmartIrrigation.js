@@ -1,473 +1,503 @@
-/**
- * SmartIrrigation.js
- * Page: Smart Irrigation Recommendation
- * Route: /irrigation
- *
- * Fetches available crop/soil options from the backend (/api/irrigation/options)
- * then POSTs form data to /api/irrigation/predict and displays the result.
- */
+import React, { useState, useEffect, useCallback } from 'react';
+import { predictIrrigation, getIrrigationOptions } from '../utils/api';
 
-import React, { useState, useEffect } from 'react';
+// ─── Translation helper ───────────────────────────────────────────────────────
+const T = {
+  title:          'Smart Irrigation Advisor',
+  subtitle:       'Live weather-based irrigation recommendations for all your crops.',
+  loadingOpts:    'Loading options...',
+  fetchingData:   'Fetching data...',
+  farmDetails:    '🌾 Farm Details',
+  selectCrop:     'Select Crop',
+  selectSoil:     'Select Soil Type',
+  temperature:    'Temperature (°C)',
+  humidity:       'Humidity (%)',
+  rainPrediction: 'Rain Expected Today?',
+  noRain:         '☀️ No Rain',
+  rainYes:        '🌧️ Rain Expected',
+  calculate:      'Calculating...',
+  getAll:         '📊 Get Irrigation Plan for All Crops',
+  getSingle:      '💧 Get Recommendation',
+  noIrrigation:   '🌧️ No Irrigation Needed Today',
+  irrigationTime: 'Water Required',
+  refresh:        'Refresh Weather',
+  detecting:      '📡 Detecting your location & live weather...',
+  weather:        'Live Weather',
+  allCrops:       'All Crops Water Plan',
+  singleResult:   'Recommendation',
+};
 
-const API_BASE = process.env.REACT_APP_API_URL || 'http://localhost:5000/api';
+// ─── WMO lookup (client-side, mirrors backend) ───────────────────────────────
+const WMO_ICONS = { 0:'☀️',1:'🌤️',2:'⛅',3:'☁️',45:'🌫️',48:'🌫️',51:'🌦️',53:'🌦️',55:'🌧️',61:'🌧️',63:'🌧️',65:'🌧️',71:'🌨️',73:'🌨️',75:'❄️',80:'🌦️',81:'🌧️',82:'⛈️',95:'⛈️',96:'⛈️',99:'⛈️' };
+const WMO_DESC  = { 0:'Clear sky',1:'Mainly clear',2:'Partly cloudy',3:'Overcast',45:'Foggy',48:'Rime fog',51:'Light drizzle',53:'Moderate drizzle',55:'Dense drizzle',61:'Slight rain',63:'Moderate rain',65:'Heavy rain',71:'Slight snowfall',73:'Moderate snowfall',75:'Heavy snowfall',80:'Rain showers',81:'Moderate showers',82:'Violent showers',95:'Thunderstorm',96:'Thunderstorm + hail',99:'Thunderstorm + heavy hail' };
+const RAINY_CODES = [51,53,55,61,63,65,80,81,82,95,96,99];
 
-// ─── Helper: POST to backend ──────────────────────────────────────────────────
-async function postJson(url, body) {
-  const res = await fetch(url, {
-    method:  'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body:    JSON.stringify(body),
-  });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || 'Something went wrong.');
-  return data;
-}
+// ─── Urgency colour helper ────────────────────────────────────────────────────
+const urgencyStyle = (u) => ({
+  high:   { bg: '#fef2f2', border: '#fca5a5', badge: '#dc2626', text: 'High Need' },
+  medium: { bg: '#fffbeb', border: '#fcd34d', badge: '#d97706', text: 'Medium Need' },
+  low:    { bg: '#f0fdf4', border: '#86efac', badge: '#16a34a', text: 'Low Need'  },
+}[u] || { bg: '#f9fafb', border: '#e5e7eb', badge: '#6b7280', text: '' });
 
-// ─── Sub-component: Result Card ───────────────────────────────────────────────
-function ResultCard({ result }) {
-  const noRain = result.message === 'No irrigation needed today';
+export default function Irrigation() {
+  const [crops, setCrops]   = useState([]);
+  const [soils, setSoils]   = useState([]);
+  const [optLoading, setOptLoad] = useState(true);
 
-  return (
-    <div
-      style={{
-        marginTop: 24,
-        padding: '20px 24px',
-        borderRadius: 12,
-        border: `2px solid ${noRain ? '#4caf50' : '#1565c0'}`,
-        background: noRain ? '#e8f5e9' : '#e3f2fd',
-        animation: 'fadeIn 0.35s ease',
-      }}
-    >
-      {/* Icon + headline */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
-        <span style={{ fontSize: 40 }}>{noRain ? '🌧️' : '💧'}</span>
-        <div>
-          <div style={{ fontWeight: 700, fontSize: 18, color: noRain ? '#2d6a2d' : '#1565c0' }}>
-            {result.message}
-          </div>
-          {noRain && (
-            <div style={{ fontSize: 13, color: '#4a7c59', marginTop: 2 }}>
-              {result.details.reason}
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* Breakdown (only when irrigation is needed) */}
-      {!noRain && result.details && (
-        <div
-          style={{
-            background: 'white',
-            borderRadius: 8,
-            padding: '14px 16px',
-            fontSize: 13,
-            color: '#374151',
-            display: 'grid',
-            gridTemplateColumns: '1fr 1fr',
-            gap: '8px 16px',
-          }}
-        >
-          <Detail icon="🌾" label="Crop base water"  value={`${result.details.baseCropWater} min`} />
-          <Detail icon="🪨" label="Soil factor"      value={`× ${result.details.soilFactor}`} />
-          <Detail icon="🌡️" label="Weather factor"   value={`× ${result.details.weatherFactor}`} />
-          <Detail icon="🌡️" label="Temperature"      value={`${result.details.temperature}°C`} />
-          <div style={{ gridColumn: '1 / -1', borderTop: '1px solid #e5e7eb', paddingTop: 8, marginTop: 4 }}>
-            <span style={{ color: '#6b7280' }}>Formula: </span>
-            <code style={{ fontSize: 12, background: '#f3f4f6', padding: '2px 6px', borderRadius: 4 }}>
-              {result.details.formula}
-            </code>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function Detail({ icon, label, value }) {
-  return (
-    <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-      <span>{icon}</span>
-      <span style={{ color: '#6b7280' }}>{label}:</span>
-      <span style={{ fontWeight: 600 }}>{value}</span>
-    </div>
-  );
-}
-
-// ─── Main Page Component ──────────────────────────────────────────────────────
-export default function SmartIrrigation() {
-  // Options fetched from backend
-  const [crops,     setCrops]     = useState([]);
-  const [soilTypes, setSoilTypes] = useState([]);
-  const [optLoading, setOptLoading] = useState(true);
-
-  // Form state
   const [form, setForm] = useState({
     cropType:       '',
     soilType:       '',
     temperature:    '',
+    humidity:       '',
     rainPrediction: 'no',
   });
 
-  // UI state
-  const [loading,  setLoading]  = useState(false);
-  const [result,   setResult]   = useState(null);
-  const [error,    setError]    = useState('');
-  const [touched,  setTouched]  = useState({});   // track which fields were blurred
+  // Weather
+  const [weather, setWeather]               = useState(null);
+  const [weatherLoading, setWeatherLoading] = useState(false);
+  const [weatherError, setWeatherError]     = useState('');
+  const [locationStatus, setLocationStatus] = useState('idle');
 
-  // ── Load dropdown options on mount ──────────────────────────────────────────
+  // Results
+  const [singleResult, setSingleResult] = useState(null);
+  const [allResult,    setAllResult]    = useState(null);
+  const [loading,   setLoading]   = useState(false);
+  const [allLoading,setAllLoading]= useState(false);
+  const [error,     setError]     = useState('');
+  const [activeTab, setActiveTab] = useState('single'); // 'single' | 'all'
+
+  // ── Load crops & soils from backend ─────────────────────────────────────────
   useEffect(() => {
-    fetch(`${API_BASE}/irrigation/options`)
-      .then(r => r.json())
+    setOptLoad(true);
+    getIrrigationOptions()
       .then(data => {
         setCrops(data.crops || []);
-        setSoilTypes(data.soilTypes || []);
+        setSoils(data.soils || []);
+        if (data.crops?.length) setForm(f => ({ ...f, cropType: data.crops[0].value }));
+        if (data.soils?.length) setForm(f => ({ ...f, soilType: data.soils[0].value }));
       })
-      .catch(() => {
-        // Fallback to minimal set if network fails
-        setCrops([
-          { value: 'rice',    label: 'Rice' },
-          { value: 'wheat',   label: 'Wheat' },
-          { value: 'maize',   label: 'Maize' },
-          { value: 'cotton',  label: 'Cotton' },
-        ]);
-        setSoilTypes([
-          { value: 'sandy', label: 'Sandy' },
-          { value: 'loamy', label: 'Loamy' },
-          { value: 'clay',  label: 'Clay' },
-        ]);
-      })
-      .finally(() => setOptLoading(false));
+      .catch(() => setError('Failed to load options. Is the backend running?'))
+      .finally(() => setOptLoad(false));
   }, []);
 
-  // ── Field change handler ─────────────────────────────────────────────────────
-  function handleChange(e) {
-    const { name, value } = e.target;
-    setForm(prev => ({ ...prev, [name]: value }));
-    setError('');
-    setResult(null);
-  }
+  // ── Detect location & fetch live weather from Open-Meteo ────────────────────
+  const detectWeather = useCallback(() => {
+    if (!navigator.geolocation) {
+      setLocationStatus('error');
+      setWeatherError('Geolocation is not supported by your browser.');
+      return;
+    }
+    setLocationStatus('detecting');
+    setWeatherLoading(true);
+    setWeatherError('');
+    setWeather(null);
 
-  function handleBlur(e) {
-    setTouched(prev => ({ ...prev, [e.target.name]: true }));
-  }
+    navigator.geolocation.getCurrentPosition(
+      async (pos) => {
+        const { latitude: lat, longitude: lng } = pos.coords;
+        setLocationStatus('found');
+        try {
+          const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lng}&current=temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m,surface_pressure&hourly=precipitation_probability,temperature_2m,weather_code&forecast_days=1&timezone=auto`;
+          const res  = await fetch(url);
+          const data = await res.json();
 
-  // ── Client-side validation ───────────────────────────────────────────────────
-  function validate() {
-    if (!form.cropType)   return 'Please select a crop type.';
-    if (!form.soilType)   return 'Please select a soil type.';
-    if (form.temperature === '') return 'Please enter the current temperature.';
-    const t = Number(form.temperature);
-    if (isNaN(t))           return 'Temperature must be a number.';
-    if (t < -10 || t > 60) return 'Temperature must be between -10°C and 60°C.';
+          const current     = data.current || {};
+          const hourly      = data.hourly  || {};
+          const code        = current.weather_code ?? 0;
+          const precipProbs = (hourly.precipitation_probability || []).slice(0, 6);
+          const maxRainProb = precipProbs.length ? Math.max(...precipProbs) : 0;
+          const isRaining   = RAINY_CODES.includes(code);
+
+          const w = {
+            temperature:        current.temperature_2m,
+            feelsLike:          current.apparent_temperature,
+            humidity:           current.relative_humidity_2m,
+            windSpeed:          current.wind_speed_10m,
+            pressure:           current.surface_pressure,
+            weatherCode:        code,
+            description:        WMO_DESC[code]  || 'Unknown',
+            icon:               WMO_ICONS[code] || '🌡️',
+            rainProbability:    maxRainProb,
+            rainPrediction:     (maxRainProb >= 50 || isRaining) ? 'yes' : 'no',
+            isCurrentlyRaining: isRaining,
+          };
+          setWeather(w);
+          // Auto-fill form with live data
+          setForm(f => ({
+            ...f,
+            temperature:    w.temperature  != null ? String(Math.round(w.temperature * 10) / 10) : f.temperature,
+            humidity:       w.humidity     != null ? String(Math.round(w.humidity))               : f.humidity,
+            rainPrediction: w.rainPrediction || f.rainPrediction,
+          }));
+        } catch {
+          setWeatherError('Could not fetch weather. Enter details manually.');
+        } finally {
+          setWeatherLoading(false);
+        }
+      },
+      (geoErr) => {
+        setLocationStatus('error');
+        setWeatherLoading(false);
+        setWeatherError(
+          geoErr.code === 1
+            ? 'Location permission denied. Enter details manually.'
+            : 'Could not detect location. Enter details manually.'
+        );
+      },
+      { timeout: 12000, maximumAge: 60000 }
+    );
+  }, []);
+
+  useEffect(() => { detectWeather(); }, [detectWeather]);
+
+  // ── Validation ───────────────────────────────────────────────────────────────
+  function validate(requireCrop = true) {
+    if (requireCrop && !form.cropType) return 'Please select a crop type.';
+    if (!form.soilType)    return 'Please select a soil type.';
+    if (form.temperature === '') return 'Temperature is required.';
+    const temp = Number(form.temperature);
+    if (isNaN(temp))              return 'Temperature must be a valid number.';
+    if (temp < -10 || temp > 60) return 'Temperature must be between -10°C and 60°C.';
+    if (form.humidity !== '') {
+      const hum = Number(form.humidity);
+      if (isNaN(hum) || hum < 0 || hum > 100) return 'Humidity must be 0–100%.';
+    }
     return null;
   }
 
-  // ── Submit handler ────────────────────────────────────────────────────────────
-  async function handleSubmit(e) {
+  // ── Submit single crop ────────────────────────────────────────────────────────
+  async function handleSubmitSingle(e) {
     e.preventDefault();
-
-    // Mark all fields as touched so validation hints show
-    setTouched({ cropType: true, soilType: true, temperature: true });
-
-    const validErr = validate();
-    if (validErr) { setError(validErr); return; }
-
+    setError(''); setSingleResult(null);
+    const err = validate(true);
+    if (err) { setError(err); return; }
     setLoading(true);
-    setError('');
-    setResult(null);
-
     try {
-      const data = await postJson(`${API_BASE}/irrigation/predict`, {
+      const data = await predictIrrigation({
         cropType:       form.cropType,
         soilType:       form.soilType,
         temperature:    Number(form.temperature),
+        humidity:       form.humidity !== '' ? Number(form.humidity) : 50,
         rainPrediction: form.rainPrediction,
       });
-      setResult(data);
+      setSingleResult(data);
+      setActiveTab('single');
     } catch (err) {
-      setError(err.message);
+      setError(err.message || 'Something went wrong. Please try again.');
     } finally {
       setLoading(false);
     }
   }
 
-  // ── Render ────────────────────────────────────────────────────────────────────
+  // ── Submit all crops ──────────────────────────────────────────────────────────
+  async function handleSubmitAll(e) {
+    e.preventDefault();
+    setError(''); setAllResult(null);
+    const err = validate(false);
+    if (err) { setError(err); return; }
+    setAllLoading(true);
+    try {
+      // Call /predict-all endpoint
+      const BASE = process.env.REACT_APP_API_URL || '';
+      const res  = await fetch(`${BASE}/api/irrigation/predict-all`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          soilType:       form.soilType,
+          temperature:    Number(form.temperature),
+          humidity:       form.humidity !== '' ? Number(form.humidity) : 50,
+          rainPrediction: form.rainPrediction,
+        }),
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error || 'Failed to get plan');
+      setAllResult(data);
+      setActiveTab('all');
+    } catch (err) {
+      setError(err.message || 'Something went wrong. Please try again.');
+    } finally {
+      setAllLoading(false);
+    }
+  }
+
+  const set = (key) => (e) => {
+    setForm(f => ({ ...f, [key]: e.target.value }));
+    setSingleResult(null); setAllResult(null); setError('');
+  };
+
+  // ── Styles ────────────────────────────────────────────────────────────────────
+  const s = {
+    page:     { maxWidth: 1100, margin: '0 auto', padding: '24px 16px' },
+    card:     { background: '#fff', borderRadius: 14, boxShadow: '0 1px 6px rgba(0,0,0,.08)', padding: '20px 24px', marginBottom: 20 },
+    label:    { display: 'block', fontWeight: 600, fontSize: 13, color: '#374151', marginBottom: 5 },
+    input:    { width: '100%', padding: '10px 12px', borderRadius: 8, border: '1.5px solid #e5e7eb', fontSize: 14, boxSizing: 'border-box' },
+    select:   { width: '100%', padding: '10px 12px', borderRadius: 8, border: '1.5px solid #e5e7eb', fontSize: 14, boxSizing: 'border-box', background: '#fff' },
+    row:      { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 16, marginBottom: 16 },
+    btnPrimary: { background: 'linear-gradient(135deg,#2d6a2d,#1b5e20)', color: '#fff', border: 'none', borderRadius: 10, padding: '13px 24px', fontWeight: 700, fontSize: 15, cursor: 'pointer', width: '100%' },
+    btnSecondary: { background: 'linear-gradient(135deg,#1565c0,#0d47a1)', color: '#fff', border: 'none', borderRadius: 10, padding: '13px 24px', fontWeight: 700, fontSize: 15, cursor: 'pointer', width: '100%' },
+    tabActive:   { background: '#2d6a2d', color: '#fff', border: 'none', borderRadius: '8px 8px 0 0', padding: '10px 24px', fontWeight: 700, cursor: 'pointer' },
+    tabInactive: { background: '#f3f4f6', color: '#6b7280', border: 'none', borderRadius: '8px 8px 0 0', padding: '10px 24px', fontWeight: 600, cursor: 'pointer' },
+  };
+
+  if (optLoading) {
+    return (
+      <div style={s.page}>
+        <h1>💧 {T.title}</h1>
+        <p>⏳ {T.loadingOpts}</p>
+      </div>
+    );
+  }
+
   return (
-    <div style={{ maxWidth: 820, margin: '0 auto', padding: '24px 16px' }}>
+    <div style={s.page}>
 
-      {/* Page header */}
-      <div className="page-header">
-        <h1>💧 Smart Irrigation Recommendation</h1>
-        <p>Get an accurate irrigation schedule based on your crop, soil, and current weather conditions.</p>
+      {/* ── Header ── */}
+      <div style={{ marginBottom: 24 }}>
+        <h1 style={{ fontSize: 26, fontWeight: 800, color: '#1b5e20', margin: 0 }}>💧 {T.title}</h1>
+        <p style={{ color: '#6b7280', marginTop: 6 }}>{T.subtitle}</p>
       </div>
 
-      {/* Info banner */}
-      <div
-        className="card"
-        style={{ background: '#e3f2fd', border: '1px solid #90caf9', marginBottom: 24 }}
-      >
-        <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 6 }}>
-          💡 Why smart irrigation matters
+      {/* ── Stats row ── */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(120px,1fr))', gap: 12, marginBottom: 20 }}>
+        {[
+          { num: crops.length, lbl: 'Crops' },
+          { num: soils.length, lbl: 'Soil Types' },
+          { num: weather ? `${Math.round(weather.temperature)}°C` : '--', lbl: 'Live Temp' },
+          { num: weather ? `${Math.round(weather.humidity)}%` : '--', lbl: 'Humidity' },
+        ].map((stat, i) => (
+          <div key={i} style={{ background: '#fff', borderRadius: 12, padding: '16px 12px', textAlign: 'center', boxShadow: '0 1px 4px rgba(0,0,0,.07)' }}>
+            <div style={{ fontSize: 24, fontWeight: 800, color: '#2d6a2d' }}>{stat.num}</div>
+            <div style={{ fontSize: 12, color: '#6b7280', marginTop: 2 }}>{stat.lbl}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* ── Weather card ── */}
+      <div style={s.card}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+          <h3 style={{ margin: 0, fontWeight: 700, fontSize: 15 }}>🌤️ {T.weather}</h3>
+          {locationStatus !== 'detecting' && (
+            <button onClick={detectWeather} style={{ background: 'none', border: '1px solid #d1d5db', borderRadius: 6, padding: '4px 12px', fontSize: 12, cursor: 'pointer', fontWeight: 600, color: '#2d6a2d' }}>
+              🔄 {T.refresh}
+            </button>
+          )}
         </div>
-        <p style={{ fontSize: 14, color: '#374151', lineHeight: 1.7 }}>
-          Over-irrigation wastes water and causes root rot. Under-irrigation reduces yield.
-          This tool uses crop-specific water needs, soil absorption rates, and real-time
-          temperature data to recommend the exact minutes to irrigate — saving water up to 30%.
-        </p>
+
+        {locationStatus === 'detecting' && (
+          <div style={{ background: '#e3f2fd', borderRadius: 10, padding: '14px 18px', color: '#1565c0', fontWeight: 600, fontSize: 14 }}>
+            {T.detecting}
+          </div>
+        )}
+
+        {weatherError && locationStatus !== 'detecting' && (
+          <div style={{ background: '#fff3e0', borderRadius: 10, padding: '12px 16px', color: '#e65100', fontSize: 13 }}>
+            ⚠️ {weatherError}
+          </div>
+        )}
+
+        {weather && locationStatus === 'found' && (
+          <div style={{ background: 'linear-gradient(135deg,#1565c0,#01579b)', borderRadius: 12, padding: '20px 24px', color: '#fff', position: 'relative', overflow: 'hidden' }}>
+            <div style={{ position: 'absolute', right: 10, top: 0, fontSize: 90, opacity: 0.12 }}>{weather.icon}</div>
+            <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap', position: 'relative' }}>
+              <div>
+                <div style={{ fontSize: 54, fontWeight: 800, lineHeight: 1 }}>{Math.round(weather.temperature)}°</div>
+                <div style={{ fontSize: 13, opacity: 0.8, marginTop: 4 }}>Feels like {Math.round(weather.feelsLike)}°C</div>
+              </div>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 36, marginBottom: 4 }}>{weather.icon}</div>
+                <div style={{ fontSize: 16, fontWeight: 700 }}>{weather.description}</div>
+                <div style={{ fontSize: 13, opacity: 0.85, marginTop: 6, display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+                  <span>💧 Humidity: {Math.round(weather.humidity)}%</span>
+                  <span>💨 Wind: {weather.windSpeed} km/h</span>
+                  <span>🌧️ Rain chance: {weather.rainProbability}%</span>
+                </div>
+                {weather.isCurrentlyRaining && (
+                  <div style={{ marginTop: 8, background: 'rgba(255,255,255,0.15)', borderRadius: 6, padding: '4px 10px', display: 'inline-block', fontSize: 13, fontWeight: 600 }}>
+                    🌧️ Currently raining — irrigation auto-set to "Rain Expected"
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 24 }} className="irrigation-grid">
+      {/* ── Form ── */}
+      <div style={s.card}>
+        <h3 style={{ fontWeight: 700, marginTop: 0, marginBottom: 18, fontSize: 15 }}>{T.farmDetails}</h3>
+        <form>
+          <div style={s.row}>
+            <div>
+              <label style={s.label}>Crop Type</label>
+              <select style={s.select} value={form.cropType} onChange={set('cropType')}>
+                <option value="">{T.selectCrop}</option>
+                {crops.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
+              </select>
+            </div>
+            <div>
+              <label style={s.label}>Soil Type</label>
+              <select style={s.select} value={form.soilType} onChange={set('soilType')}>
+                <option value="">{T.selectSoil}</option>
+                {soils.map(soil => <option key={soil.value} value={soil.value}>{soil.label}</option>)}
+              </select>
+            </div>
+          </div>
 
-        {/* ── Form ─────────────────────────────────────────────────────────────── */}
-        <div className="card">
-          <h2 style={{ fontSize: 17, fontWeight: 700, marginBottom: 20, color: '#2d6a2d' }}>
-            🌾 Enter Farm Details
-          </h2>
+          <div style={s.row}>
+            <div>
+              <label style={s.label}>{T.temperature}</label>
+              <input style={s.input} type="number" step="0.1" value={form.temperature} onChange={set('temperature')} placeholder="Auto-detected or enter manually" />
+            </div>
+            <div>
+              <label style={s.label}>{T.humidity}</label>
+              <input style={s.input} type="number" step="1" min="0" max="100" value={form.humidity} onChange={set('humidity')} placeholder="Auto-detected or enter manually" />
+            </div>
+          </div>
 
-          {optLoading && (
-            <div className="loading" style={{ padding: 20 }}>Loading options...</div>
+          <div style={{ marginBottom: 18 }}>
+            <label style={s.label}>{T.rainPrediction}</label>
+            <div style={{ display: 'flex', gap: 10, marginTop: 4 }}>
+              {['no', 'yes'].map(v => (
+                <button key={v} type="button"
+                  onClick={() => setForm(f => ({ ...f, rainPrediction: v }))}
+                  style={{ flex: 1, padding: '10px 16px', borderRadius: 8, fontWeight: 600, cursor: 'pointer',
+                    border:      form.rainPrediction === v ? (v === 'no' ? '2px solid #e65100' : '2px solid #1565c0') : '1.5px solid #e5e7eb',
+                    background:  form.rainPrediction === v ? (v === 'no' ? '#fff3e0' : '#e3f2fd')                    : '#f9fafb',
+                    color:       form.rainPrediction === v ? (v === 'no' ? '#e65100' : '#1565c0')                    : '#374151',
+                  }}>
+                  {v === 'no' ? T.noRain : T.rainYes}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {error && (
+            <div style={{ background: '#fef2f2', border: '1px solid #fca5a5', borderRadius: 8, padding: '10px 14px', color: '#dc2626', fontSize: 13, marginBottom: 14 }}>
+              ⚠️ {error}
+            </div>
           )}
 
-          {!optLoading && (
-            <form onSubmit={handleSubmit} noValidate>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            <button type="submit" style={{ ...s.btnPrimary, opacity: loading ? 0.7 : 1 }}
+              disabled={loading} onClick={handleSubmitSingle}>
+              {loading ? T.calculate : T.getSingle}
+            </button>
+            <button type="submit" style={{ ...s.btnSecondary, opacity: allLoading ? 0.7 : 1 }}
+              disabled={allLoading} onClick={handleSubmitAll}>
+              {allLoading ? T.calculate : T.getAll}
+            </button>
+          </div>
+        </form>
+      </div>
 
-              {/* Crop Type */}
-              <div className="form-group">
-                <label htmlFor="cropType">Crop Type *</label>
-                <select
-                  id="cropType"
-                  name="cropType"
-                  value={form.cropType}
-                  onChange={handleChange}
-                  onBlur={handleBlur}
-                  style={touched.cropType && !form.cropType
-                    ? { borderColor: '#c62828' } : {}}
-                >
-                  <option value="">— Select crop —</option>
-                  {crops.map(c => (
-                    <option key={c.value} value={c.value}>{c.label}</option>
-                  ))}
-                </select>
-                {touched.cropType && !form.cropType && (
-                  <span style={{ color: '#c62828', fontSize: 12 }}>Required</span>
-                )}
+      {/* ── Results ── */}
+      {(singleResult || allResult) && (
+        <div style={s.card}>
+          {/* Tab bar */}
+          <div style={{ display: 'flex', gap: 4, marginBottom: 20 }}>
+            {singleResult && (
+              <button style={activeTab === 'single' ? s.tabActive : s.tabInactive} onClick={() => setActiveTab('single')}>
+                💧 Single Crop
+              </button>
+            )}
+            {allResult && (
+              <button style={activeTab === 'all' ? s.tabActive : s.tabInactive} onClick={() => setActiveTab('all')}>
+                📊 All Crops ({allResult.crops?.length})
+              </button>
+            )}
+          </div>
+
+          {/* Single result */}
+          {activeTab === 'single' && singleResult && (
+            singleResult.irrigationNeeded === false ? (
+              <div style={{ background: '#e3f2fd', border: '1.5px solid #90caf9', borderRadius: 12, padding: '20px 24px' }}>
+                <h3 style={{ color: '#1565c0', margin: '0 0 8px' }}>{T.noIrrigation}</h3>
+                <p style={{ color: '#1e40af', margin: 0 }}>{singleResult.details?.reason}</p>
               </div>
-
-              {/* Soil Type */}
-              <div className="form-group">
-                <label htmlFor="soilType">Soil Type *</label>
-                <select
-                  id="soilType"
-                  name="soilType"
-                  value={form.soilType}
-                  onChange={handleChange}
-                  onBlur={handleBlur}
-                  style={touched.soilType && !form.soilType
-                    ? { borderColor: '#c62828' } : {}}
-                >
-                  <option value="">— Select soil type —</option>
-                  {soilTypes.map(s => (
-                    <option key={s.value} value={s.value}>
-                      {s.label}
-                      {s.factor ? ` (factor: ${s.factor})` : ''}
-                    </option>
-                  ))}
-                </select>
-                {touched.soilType && !form.soilType && (
-                  <span style={{ color: '#c62828', fontSize: 12 }}>Required</span>
-                )}
-              </div>
-
-              {/* Temperature */}
-              <div className="form-group">
-                <label htmlFor="temperature">Current Temperature (°C) *</label>
-                <input
-                  id="temperature"
-                  name="temperature"
-                  type="number"
-                  min="-10"
-                  max="60"
-                  step="0.1"
-                  placeholder="e.g. 32"
-                  value={form.temperature}
-                  onChange={handleChange}
-                  onBlur={handleBlur}
-                  style={touched.temperature && form.temperature === ''
-                    ? { borderColor: '#c62828' } : {}}
-                />
-                {touched.temperature && form.temperature === '' && (
-                  <span style={{ color: '#c62828', fontSize: 12 }}>Required</span>
-                )}
-              </div>
-
-              {/* Rain Prediction Toggle */}
-              <div className="form-group">
-                <label>Rain Expected Today?</label>
-                <div style={{ display: 'flex', gap: 12 }}>
-                  {['no', 'yes'].map(val => (
-                    <label
-                      key={val}
-                      style={{
-                        display:       'flex',
-                        alignItems:    'center',
-                        gap:           8,
-                        cursor:        'pointer',
-                        padding:       '10px 20px',
-                        borderRadius:  8,
-                        border:        `2px solid ${form.rainPrediction === val ? '#2d6a2d' : '#e5e7eb'}`,
-                        background:    form.rainPrediction === val ? '#e8f5e9' : 'white',
-                        fontWeight:    form.rainPrediction === val ? 600 : 400,
-                        color:         form.rainPrediction === val ? '#2d6a2d' : '#374151',
-                        fontSize:      14,
-                        flex:          1,
-                        justifyContent:'center',
-                        transition:    'all 0.15s',
-                      }}
-                    >
-                      <input
-                        type="radio"
-                        name="rainPrediction"
-                        value={val}
-                        checked={form.rainPrediction === val}
-                        onChange={handleChange}
-                        style={{ display: 'none' }}
-                      />
-                      {val === 'yes' ? '🌧️ Yes' : '☀️ No'}
-                    </label>
-                  ))}
+            ) : (
+              <div>
+                <div style={{ background: 'linear-gradient(135deg,#1b5e20,#2d6a2d)', borderRadius: 12, padding: '20px 24px', color: '#fff', marginBottom: 16 }}>
+                  <div style={{ fontSize: 13, opacity: 0.8 }}>
+                    {crops.find(c => c.value === singleResult.details?.cropType)?.label || singleResult.details?.cropType} — {soils.find(soil => soil.value === singleResult.details?.soilType)?.label || singleResult.details?.soilType} soil
+                  </div>
+                  <div style={{ fontSize: 44, fontWeight: 800, lineHeight: 1.1, margin: '8px 0' }}>{singleResult.irrigationTime}</div>
+                  <div style={{ fontSize: 13, opacity: 0.8 }}>per square metre of farmland</div>
+                </div>
+                <div style={{ background: '#f9fafb', borderRadius: 10, padding: '14px 18px', fontSize: 13, color: '#374151' }}>
+                  <div style={{ fontWeight: 700, marginBottom: 8 }}>Calculation Breakdown</div>
+                  <div>🌡️ Temperature: <b>{singleResult.details?.temperature}°C</b></div>
+                  <div>💧 Humidity: <b>{singleResult.details?.humidity}%</b></div>
+                  <div>🌱 Soil factor: <b>{singleResult.details?.soilFactor}</b></div>
+                  <div>🌦️ Climate factor: <b>{singleResult.details?.climateFactor}</b></div>
+                  <div style={{ marginTop: 8, fontFamily: 'monospace', background: '#fff', padding: '8px 12px', borderRadius: 6, border: '1px solid #e5e7eb' }}>
+                    {singleResult.details?.formula}
+                  </div>
                 </div>
               </div>
-
-              {/* Error message */}
-              {error && (
-                <div className="error-msg" role="alert">{error}</div>
-              )}
-
-              {/* Submit */}
-              <button
-                type="submit"
-                className="btn-primary btn-full"
-                disabled={loading}
-                style={{
-                  marginTop:     4,
-                  padding:       '12px 0',
-                  fontSize:      15,
-                  fontWeight:    700,
-                  opacity:       loading ? 0.7 : 1,
-                  position:      'relative',
-                }}
-              >
-                {loading ? (
-                  <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
-                    <LoadingSpinner />
-                    Calculating...
-                  </span>
-                ) : '💧 Get Recommendation'}
-              </button>
-            </form>
-          )}
-        </div>
-
-        {/* ── Result + Reference Panel ──────────────────────────────────────── */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-
-          {/* Result */}
-          {result ? (
-            <ResultCard result={result} />
-          ) : (
-            <div
-              className="card"
-              style={{
-                display:        'flex',
-                flexDirection:  'column',
-                alignItems:     'center',
-                justifyContent: 'center',
-                minHeight:      180,
-                color:          '#9ca3af',
-                gap:            12,
-              }}
-            >
-              <span style={{ fontSize: 48 }}>💧</span>
-              <span style={{ fontSize: 14 }}>
-                Fill in your farm details and click<br />"Get Recommendation"
-              </span>
-            </div>
+            )
           )}
 
-          {/* Quick reference card */}
-          <div className="card" style={{ background: '#f9fafb' }}>
-            <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 12, color: '#374151' }}>
-              📊 Quick Reference
-            </div>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
-              <thead>
-                <tr style={{ background: '#e8f5e9' }}>
-                  <th style={thStyle}>Condition</th>
-                  <th style={thStyle}>Factor</th>
-                  <th style={thStyle}>Effect</th>
-                </tr>
-              </thead>
-              <tbody>
-                {[
-                  ['Sandy soil',    '× 1.3', '↑ More water'],
-                  ['Loamy soil',    '× 1.0', 'Baseline'],
-                  ['Clay soil',     '× 0.8', '↓ Less water'],
-                  ['Temp > 35°C',   '× 1.3', '↑ More water'],
-                  ['Temp 25–35°C',  '× 1.1', '↑ Slightly more'],
-                  ['Temp < 25°C',   '× 0.9', '↓ Less water'],
-                  ['Rain expected', '—',     'Skip irrigation'],
-                ].map(([cond, factor, effect]) => (
-                  <tr key={cond} style={{ borderBottom: '1px solid #e5e7eb' }}>
-                    <td style={tdStyle}>{cond}</td>
-                    <td style={{ ...tdStyle, fontFamily: 'monospace', color: '#1565c0' }}>{factor}</td>
-                    <td style={{ ...tdStyle, color: '#2d6a2d' }}>{effect}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </div>
+          {/* All crops result */}
+          {activeTab === 'all' && allResult && (
+            allResult.rainPrediction === 'yes' ? (
+              <div style={{ background: '#e3f2fd', border: '1.5px solid #90caf9', borderRadius: 12, padding: '20px 24px' }}>
+                <h3 style={{ color: '#1565c0', margin: '0 0 8px' }}>{T.noIrrigation}</h3>
+                <p style={{ color: '#1e40af', margin: 0 }}>Rain is predicted — no irrigation needed for any crop today.</p>
+              </div>
+            ) : (
+              <div>
+                <div style={{ background: '#f9fafb', borderRadius: 10, padding: '12px 16px', marginBottom: 16, fontSize: 13, color: '#374151', display: 'flex', gap: 20, flexWrap: 'wrap' }}>
+                  <span>🌡️ <b>{allResult.temperature}°C</b></span>
+                  <span>💧 <b>{allResult.humidity}%</b> humidity</span>
+                  <span>🌱 Soil: <b>{soils.find(soil => soil.value === allResult.soilType)?.label || allResult.soilType}</b></span>
+                  <span>🌦️ Climate factor: <b>{allResult.climateFactor}</b></span>
+                </div>
 
-      {/* Responsive grid fix */}
+                {/* Legend */}
+                <div style={{ display: 'flex', gap: 10, marginBottom: 14, flexWrap: 'wrap' }}>
+                  {['high','medium','low'].map(u => {
+                    const us = urgencyStyle(u);
+                    return (
+                      <span key={u} style={{ background: us.bg, border: `1px solid ${us.border}`, color: us.badge, borderRadius: 20, padding: '3px 12px', fontSize: 12, fontWeight: 600 }}>
+                        ● {us.text}
+                      </span>
+                    );
+                  })}
+                  <span style={{ fontSize: 12, color: '#9ca3af', marginLeft: 4 }}>Sorted by water need (highest first)</span>
+                </div>
+
+                {/* Crop grid */}
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 12 }}>
+                  {allResult.crops.map(crop => {
+                    const us = urgencyStyle(crop.urgency);
+                    return (
+                      <div key={crop.value} style={{ background: us.bg, border: `1.5px solid ${us.border}`, borderRadius: 12, padding: '14px 16px' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8 }}>
+                          <div style={{ fontWeight: 700, fontSize: 14, color: '#111827' }}>{crop.label}</div>
+                          <span style={{ background: us.badge, color: '#fff', borderRadius: 10, padding: '2px 8px', fontSize: 11, fontWeight: 700, whiteSpace: 'nowrap' }}>
+                            {us.text}
+                          </span>
+                        </div>
+                        <div style={{ fontSize: 28, fontWeight: 800, color: us.badge }}>{crop.litresPerSqM}</div>
+                        <div style={{ fontSize: 12, color: '#6b7280' }}>litres / m²</div>
+                        <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 6 }}>
+                          Soil ×{crop.soilFactor} · Climate ×{crop.climateFactor}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )
+          )}
+        </div>
+      )}
+
       <style>{`
-        @media (max-width: 700px) {
-          .irrigation-grid { grid-template-columns: 1fr !important; }
-        }
-        @keyframes fadeIn {
-          from { opacity: 0; transform: translateY(8px); }
-          to   { opacity: 1; transform: translateY(0); }
-        }
-        @keyframes spin {
-          to { transform: rotate(360deg); }
-        }
+        @keyframes fadeSlideUp { from { opacity:0; transform:translateY(16px); } to { opacity:1; transform:translateY(0); } }
+        @keyframes spin { from { transform:rotate(0deg); } to { transform:rotate(360deg); } }
+        select:focus, input:focus { outline: none; border-color: #2d6a2d; box-shadow: 0 0 0 3px rgba(45,106,45,.12); }
       `}</style>
     </div>
-  );
-}
-
-// ─── Inline table styles ──────────────────────────────────────────────────────
-const thStyle = {
-  padding:   '7px 10px',
-  textAlign: 'left',
-  fontWeight: 600,
-  color:     '#2d6a2d',
-  fontSize:  12,
-};
-const tdStyle = {
-  padding: '6px 10px',
-  color:   '#374151',
-};
-
-// ─── Tiny SVG spinner ─────────────────────────────────────────────────────────
-function LoadingSpinner() {
-  return (
-    <svg
-      width="18" height="18" viewBox="0 0 24 24" fill="none"
-      style={{ animation: 'spin 0.8s linear infinite' }}
-    >
-      <circle cx="12" cy="12" r="10" stroke="rgba(255,255,255,0.3)" strokeWidth="3" />
-      <path d="M12 2a10 10 0 0 1 10 10" stroke="white" strokeWidth="3" strokeLinecap="round" />
-    </svg>
   );
 }
