@@ -12,6 +12,7 @@ import FearCrusher from './pages/FearCrusher';
 import Videos from './pages/Videos';
 import Finance from './pages/Finance';
 import BusinessHub from './pages/BusinessHub';
+import SmartIrrigation from './pages/SmartIrrigation';
 import './styles/global.css';
 
 export default function App() {
@@ -31,6 +32,7 @@ export default function App() {
           <Route path="/videos" element={<Videos />} />
           <Route path="/finance" element={<Finance />} />
           <Route path="/business" element={<BusinessHub />} />
+          <Route path="/irrigation"  element={<SmartIrrigation />} />
         </Routes>
       </main>
       <footer style={{ textAlign: 'center', padding: '24px 16px', color: '#9ca3af', fontSize: 13, borderTop: '1px solid #e5e7eb', background: 'white', marginTop: 40 }}>

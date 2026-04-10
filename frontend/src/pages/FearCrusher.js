@@ -25,6 +25,10 @@ export default function FearCrusher() {
   const [tab, setTab]                   = useState('overview');
   const [calcAcres, setCalcAcres]       = useState(2);
 
+  // ── NEW: real soil profile + CSV metadata from CropDataset-Enhanced.csv ──
+  const [soilProfile, setSoilProfile]   = useState(null);
+  const [csvInfo, setCsvInfo]           = useState(null);   // { found, address, source }
+
   useEffect(() => {
     api('/fear/states').then(r => {
       setAllStates(r.data || []);
@@ -33,17 +37,37 @@ export default function FearCrusher() {
     fetchRecommendations('Karnataka', 'Raichur');
   }, []);
 
-  async function fetchRecommendations(state, district) {
+  // lat/lon optional — passed when GPS is available so backend can do nearest-match
+  async function fetchRecommendations(state, district, lat, lon) {
     setRecLoading(true);
     setRecommended([]);
     setData(null);
     setSelectedCrop('');
+    setSoilProfile(null);
+    setCsvInfo(null);
     try {
-      const locRes = await api(`/fear/location-data?state=${encodeURIComponent(state)}&district=${encodeURIComponent(district)}`);
-      setLocationData(locRes);
+      // Build query strings — include lat/lon if available
+      const locParams = new URLSearchParams({ state, district });
+      const recParams = new URLSearchParams({ state, district });
+      if (lat && lon) {
+        locParams.set('lat', lat);  locParams.set('lon', lon);
+        recParams.set('lat', lat);  recParams.set('lon', lon);
+      }
 
-      const recRes = await api(`/fear/recommend?state=${encodeURIComponent(state)}&district=${encodeURIComponent(district)}`);
+      const locRes = await api(`/fear/location-data?${locParams.toString()}`);
+      setLocationData(locRes);
+      if (locRes.soil_profile) setSoilProfile(locRes.soil_profile);
+
+      const recRes = await api(`/fear/recommend?${recParams.toString()}`);
       setRecommended(recRes.recommended_crops || []);
+
+      // Store CSV metadata for the badge
+      setCsvInfo({
+        found:   recRes.csv_crops_found,
+        address: recRes.csv_matched_address,
+        source:  recRes.csv_data_source,
+      });
+      if (recRes.soil_profile) setSoilProfile(recRes.soil_profile);
 
       if (recRes.recommended_crops?.length > 0) {
         const top = recRes.recommended_crops[0];
@@ -89,7 +113,8 @@ export default function FearCrusher() {
           const state    = addr?.state    || 'Karnataka';
           const district = addr?.county || addr?.state_district || addr?.city || '';
           setLocation({ state, district });
-          fetchRecommendations(state, district);
+          // Pass GPS coords so backend can do nearest-match in CSV
+          fetchRecommendations(state, district, latitude, longitude);
         } catch (e) {
           console.error(e);
         } finally {
@@ -171,6 +196,36 @@ export default function FearCrusher() {
             </span>
           </div>
         )}
+
+        {/* ── NEW: Real soil N/P/K/pH from CropDataset-Enhanced.csv ── */}
+        {soilProfile && (
+          <div style={{ marginTop: 14, padding: '12px 14px', background: 'white', borderRadius: 10, border: '1px solid #c8e6c9' }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: '#2d6a2d', marginBottom: 8 }}>
+              🧪 Real Soil Analysis {csvInfo?.address ? `— ${csvInfo.address}` : ''}
+              <span style={{ fontWeight: 400, color: '#6b7280', marginLeft: 6 }}>
+                (from CropDataset-Enhanced.csv)
+              </span>
+            </div>
+            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+              {[
+                { label: 'Nitrogen (N)',    val: soilProfile.nitrogen?.dominant,    icon: '🌿' },
+                { label: 'Phosphorous (P)', val: soilProfile.phosphorous?.dominant, icon: '🔵' },
+                { label: 'Potassium (K)',   val: soilProfile.potassium?.dominant,   icon: '🟡' },
+                { label: 'pH',             val: soilProfile.ph?.dominant,           icon: '⚗️' },
+              ].map(item => (
+                <div key={item.label} style={{
+                  background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 8,
+                  padding: '6px 12px', textAlign: 'center', minWidth: 90,
+                }}>
+                  <div style={{ fontSize: 16 }}>{item.icon}</div>
+                  <div style={{ fontSize: 11, color: '#6b7280', marginTop: 2 }}>{item.label}</div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: '#166534' }}>{item.val || '—'}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         {locationData && !locationData.has_data && (
           <div style={{ marginTop: 10, fontSize: 12, color: '#e65100' }}>
             ⚠️ No soil/climate data for this district — showing general recommendations
@@ -188,6 +243,11 @@ export default function FearCrusher() {
           </div>
           <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 14 }}>
             Based on your soil type, local climate and current market prices
+            {csvInfo?.found && (
+              <span style={{ marginLeft: 8, background: '#dcfce7', color: '#166534', borderRadius: 20, padding: '2px 8px', fontSize: 11, fontWeight: 600 }}>
+                ✓ Real farmer data used
+              </span>
+            )}
           </div>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
             {recommended.map((rec, i) => (
@@ -198,7 +258,7 @@ export default function FearCrusher() {
                   background:   selectedCrop === rec.crop ? '#2d6a2d' : 'white',
                   color:        selectedCrop === rec.crop ? 'white' : '#374151',
                   border:       '1.5px solid',
-                  borderColor:  selectedCrop === rec.crop ? '#2d6a2d' : '#e5e7eb',
+                  borderColor:  selectedCrop === rec.crop ? '#2d6a2d' : (rec.csv_confirmed ? '#86efac' : '#e5e7eb'),
                   padding:      '8px 14px',
                   borderRadius: 8,
                   cursor:       'pointer',
@@ -212,6 +272,9 @@ export default function FearCrusher() {
                 {i === 2 && <span style={{ fontSize: 14 }}>🥉</span>}
                 {i > 2  && <span style={{ fontSize: 11, opacity: 0.6 }}>#{i + 1}</span>}
                 {rec.crop}
+                {rec.csv_confirmed && (
+                  <span title="Farmers in your district grow this" style={{ fontSize: 10, background: '#dcfce7', color: '#166534', borderRadius: 10, padding: '1px 5px' }}>✓</span>
+                )}
                 <span style={{ fontSize: 10, opacity: 0.7 }}>({rec.suitability_score}%)</span>
               </button>
             ))}
@@ -230,6 +293,21 @@ export default function FearCrusher() {
       {/* ── DETAIL UI ── */}
       {data && (
         <div>
+          {/* CSV confirmation banner */}
+          {data.csv_confirmed && (
+            <div style={{ background: '#dcfce7', border: '1px solid #86efac', borderRadius: 10, padding: '10px 16px', marginBottom: 16, display: 'flex', alignItems: 'center', gap: 10 }}>
+              <span style={{ fontSize: 20 }}>✅</span>
+              <div>
+                <div style={{ fontWeight: 700, color: '#166534', fontSize: 14 }}>
+                  Verified by real farmer data — {data.crop} is already grown in {csvInfo?.address || location.district || location.state}
+                </div>
+                <div style={{ fontSize: 12, color: '#15803d', marginTop: 2 }}>
+                  Source: CropDataset-Enhanced.csv · 730 districts across all Indian states
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Hero stats */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(160px,1fr))', gap: 12, marginBottom: 24 }}>
             <div className="stat-box" style={{ borderLeft: '4px solid #2d6a2d' }}>
@@ -289,13 +367,102 @@ export default function FearCrusher() {
 
           {/* Tabs */}
           <div style={{ display: 'flex', gap: 4, background: '#f3f4f6', borderRadius: 10, padding: 4, marginBottom: 20, flexWrap: 'wrap' }}>
-            {[['overview', '📊 Overview'], ['stories', '🙋 Success Stories'], ['guide', '📅 Week-by-Week Guide'], ['calculator', '🧮 Profit Calculator']].map(([id, label]) => (
+            {[
+              ['overview',   '📊 Overview'],
+              ['soil',       '🧪 Soil Profile'],
+              ['stories',    '🙋 Success Stories'],
+              ['guide',      '📅 Week-by-Week Guide'],
+              ['calculator', '🧮 Profit Calculator'],
+            ].map(([id, label]) => (
               <button key={id} onClick={() => setTab(id)}
                 style={{ background: tab === id ? 'white' : 'none', border: 'none', borderRadius: 8, padding: '8px 14px', fontWeight: tab === id ? 600 : 400, color: tab === id ? '#2d6a2d' : '#6b7280', boxShadow: tab === id ? '0 1px 3px rgba(0,0,0,0.1)' : 'none', fontSize: 13, cursor: 'pointer' }}>
                 {label}
               </button>
             ))}
           </div>
+
+          {/* Soil Profile tab — real N/P/K/pH data from CropDataset-Enhanced.csv */}
+          {tab === 'soil' && (
+            <div className="card">
+              <h3 style={{ fontWeight: 700, marginBottom: 4 }}>🧪 Soil Profile — {csvInfo?.address || location.district || location.state}</h3>
+              <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 16 }}>
+                Real soil data from CropDataset-Enhanced.csv · 730 Indian districts surveyed
+              </div>
+              {soilProfile ? (
+                <>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(200px,1fr))', gap: 14, marginBottom: 20 }}>
+                    {[
+                      { key: 'nitrogen',    label: 'Nitrogen (N)',    icon: '🌿', color: '#166534', bg: '#dcfce7', desc: 'Needed for leaf growth and green colour' },
+                      { key: 'phosphorous', label: 'Phosphorous (P)', icon: '🔵', color: '#1e40af', bg: '#dbeafe', desc: 'Needed for root development and flowering' },
+                      { key: 'potassium',   label: 'Potassium (K)',   icon: '🟡', color: '#92400e', bg: '#fef3c7', desc: 'Needed for fruit quality and disease resistance' },
+                    ].map(({ key, label, icon, color, bg, desc }) => {
+                      const p = soilProfile[key];
+                      if (!p) return null;
+                      return (
+                        <div key={key} style={{ background: bg, borderRadius: 12, padding: 16 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                            <span style={{ fontSize: 22 }}>{icon}</span>
+                            <div>
+                              <div style={{ fontWeight: 700, color, fontSize: 14 }}>{label}</div>
+                              <div style={{ fontSize: 11, color: '#6b7280' }}>{desc}</div>
+                            </div>
+                          </div>
+                          {/* Stacked bar */}
+                          <div style={{ display: 'flex', height: 10, borderRadius: 6, overflow: 'hidden', marginBottom: 6 }}>
+                            <div style={{ width: `${(p.high * 100).toFixed(0)}%`,   background: '#16a34a', transition: 'width 0.5s' }} title={`High: ${(p.high*100).toFixed(0)}%`} />
+                            <div style={{ width: `${(p.medium * 100).toFixed(0)}%`, background: '#f59e0b', transition: 'width 0.5s' }} title={`Medium: ${(p.medium*100).toFixed(0)}%`} />
+                            <div style={{ width: `${(p.low * 100).toFixed(0)}%`,    background: '#ef4444', transition: 'width 0.5s' }} title={`Low: ${(p.low*100).toFixed(0)}%`} />
+                          </div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11 }}>
+                            <span style={{ color: '#16a34a' }}>High {(p.high*100).toFixed(0)}%</span>
+                            <span style={{ color: '#f59e0b' }}>Med {(p.medium*100).toFixed(0)}%</span>
+                            <span style={{ color: '#ef4444' }}>Low {(p.low*100).toFixed(0)}%</span>
+                          </div>
+                          <div style={{ marginTop: 8, fontWeight: 700, color, fontSize: 13 }}>
+                            Dominant: {p.dominant}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {/* pH panel */}
+                  {soilProfile.ph && (
+                    <div style={{ background: '#f5f3ff', borderRadius: 12, padding: 16 }}>
+                      <div style={{ fontWeight: 700, color: '#6d28d9', marginBottom: 8 }}>⚗️ Soil pH</div>
+                      <div style={{ display: 'flex', height: 10, borderRadius: 6, overflow: 'hidden', marginBottom: 6 }}>
+                        <div style={{ width: `${(soilProfile.ph.acidic*100).toFixed(0)}%`,   background: '#dc2626' }} title="Acidic" />
+                        <div style={{ width: `${(soilProfile.ph.neutral*100).toFixed(0)}%`,  background: '#16a34a' }} title="Neutral" />
+                        <div style={{ width: `${(soilProfile.ph.alkaline*100).toFixed(0)}%`, background: '#2563eb' }} title="Alkaline" />
+                      </div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11 }}>
+                        <span style={{ color: '#dc2626' }}>Acidic {(soilProfile.ph.acidic*100).toFixed(0)}%</span>
+                        <span style={{ color: '#16a34a' }}>Neutral {(soilProfile.ph.neutral*100).toFixed(0)}%</span>
+                        <span style={{ color: '#2563eb' }}>Alkaline {(soilProfile.ph.alkaline*100).toFixed(0)}%</span>
+                      </div>
+                      <div style={{ marginTop: 8, fontWeight: 700, color: '#6d28d9', fontSize: 13 }}>
+                        Dominant: {soilProfile.ph.dominant}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Soil suitability note for selected crop */}
+                  <div style={{ marginTop: 16, padding: '12px 14px', background: '#f9fafb', borderRadius: 8, fontSize: 13, color: '#374151' }}>
+                    💡 <strong>{data.crop}</strong> grows best in soils with{' '}
+                    {data.crop === 'Paddy' || data.crop === 'Banana' || data.crop === 'Turmeric' ? 'adequate nitrogen and neutral pH.' :
+                     data.crop === 'Wheat' || data.crop === 'Mustard' ? 'medium nitrogen and slightly alkaline pH.' :
+                     data.crop === 'Groundnut' || data.crop === 'Soybean' ? 'medium phosphorous and neutral pH.' :
+                     'balanced N-P-K levels and neutral to slightly acidic pH.'}
+                    {' '}Talk to your local KVK for a detailed soil test and fertiliser plan.
+                  </div>
+                </>
+              ) : (
+                <div style={{ color: '#6b7280', fontSize: 14, padding: 16, textAlign: 'center' }}>
+                  No soil profile data available for this district. Select a different district or use GPS auto-detect.
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Overview tab */}
           {tab === 'overview' && (

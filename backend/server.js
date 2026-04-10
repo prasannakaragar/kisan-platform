@@ -13,6 +13,7 @@ const fearRouter = require('./routes/fear');
 const videosRouter = require('./routes/videos');
 const financeRouter = require('./routes/finance');
 const businessRouter = require('./routes/business');
+const irrigationRouter  = require('./routes/irrigation');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -43,6 +44,7 @@ app.use('/api/fear', fearRouter);
 app.use('/api/videos', videosRouter);
 app.use('/api/finance', financeRouter);
 app.use('/api/business', businessRouter);
+app.use('/api/irrigation',  irrigationRouter);
 
 app.get('/api/health', (req, res) => res.json({ status: 'ok', time: new Date() }));
 

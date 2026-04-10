@@ -2,17 +2,18 @@ import React, { useState } from 'react';
 import { NavLink } from 'react-router-dom';
 
 const NAV_ITEMS = [
-  { path: '/', label: '🏠 Home' },
-  { path: '/prices', label: '📈 Prices' },
-  { path: '/schemes', label: '🏛️ Schemes' },
-  { path: '/labour', label: '👷 Labour' },
-  { path: '/marketplace', label: '🛒 Market' },
-  { path: '/barter', label: '🔄 Barter' },
-  { path: '/advisor', label: '🤖 Advisor' },
-  { path: '/fear', label: '💪 Fear' },
-  { path: '/videos', label: '🎬 Videos' },
-  { path: '/finance', label: '💰 Finance' },
-  { path: '/business', label: '🏪 Business' },
+  { path: '/', label: 'Home' },
+  { path: '/prices', label: 'Prices' },
+  { path: '/schemes', label: 'Schemes' },
+  { path: '/labour', label: 'Labour' },
+  { path: '/marketplace', label: 'Market' },
+  { path: '/barter', label: 'Barter' },
+  { path: '/advisor', label: 'Advisor' },
+  { path: '/fear', label: 'Fear' },
+  { path: '/videos', label: 'Videos' },
+  { path: '/finance', label: 'Finance' },
+  { path: '/business', label: 'Business' },
+  { path: '/irrigation', label: 'Irrigation' },
 ];
 
 export default function Navbar() {
