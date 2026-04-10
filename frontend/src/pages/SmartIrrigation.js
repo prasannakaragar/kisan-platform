@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { predictIrrigation, getIrrigationOptions } from '../utils/api';
+import { predictIrrigation, predictAllIrrigation, getIrrigationOptions } from '../utils/api';
 
 // ─── Translation helper ───────────────────────────────────────────────────────
 const T = {
@@ -193,23 +193,16 @@ export default function Irrigation() {
   async function handleSubmitAll(e) {
     e.preventDefault();
     setError(''); setAllResult(null);
-    const err = validate(false);
+    const err = validate(false); // false = crop not required for "all crops" mode
     if (err) { setError(err); return; }
     setAllLoading(true);
     try {
-      // Call /predict-all endpoint
-      const BASE = process.env.REACT_APP_API_URL || '';
-      const res  = await fetch(`${BASE}/api/irrigation/predict-all`, {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          soilType:       form.soilType,
-          temperature:    Number(form.temperature),
-          humidity:       form.humidity !== '' ? Number(form.humidity) : 50,
-          rainPrediction: form.rainPrediction,
-        }),
+      const data = await predictAllIrrigation({
+        soilType:       form.soilType,
+        temperature:    Number(form.temperature),
+        humidity:       form.humidity !== '' ? Number(form.humidity) : 50,
+        rainPrediction: form.rainPrediction,
       });
-      const data = await res.json();
       if (!data.success) throw new Error(data.error || 'Failed to get plan');
       setAllResult(data);
       setActiveTab('all');

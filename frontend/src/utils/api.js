@@ -69,7 +69,8 @@ export const getBusinessIdeas = (params) => api.get('/business', { params });
 export const getBusinessIdea = (id) => api.get(`/business/${id}`);
 export const getBusinessLoans = () => api.get('/business/meta/loans');
 // Smart Irrigation
-export const getIrrigationOptions = ()     => api.get('/irrigation/options');
-export const predictIrrigation    = (data) => api.post('/irrigation/predict', data);
+export const getIrrigationOptions   = ()     => api.get('/irrigation/options');
+export const predictIrrigation      = (data) => api.post('/irrigation/predict', data);
+export const predictAllIrrigation   = (data) => api.post('/irrigation/predict-all', data);
 
 export default api;

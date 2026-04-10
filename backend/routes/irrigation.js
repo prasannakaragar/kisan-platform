@@ -217,8 +217,8 @@ function validateInput(body) {
   return errors;
 }
 
-// ─── GET / — return available crop & soil options ─────────────────────────────
-router.get('/', (req, res) => {
+// ─── GET /options — return available crop & soil options ──────────────────────
+router.get('/options', (req, res) => {
   res.json({
     success: true,
     crops: Object.keys(CROP_WATER).map(key => ({
